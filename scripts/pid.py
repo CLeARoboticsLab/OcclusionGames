@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import rospy
-from geomtry_msgs.msg import Point, Twist
+from geometry_msgs.msg import Point, Twist
 from nav_msgs.msg import Odometry
 
 X_GOAL = 50
