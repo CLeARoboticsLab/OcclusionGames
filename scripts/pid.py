@@ -24,13 +24,13 @@ class PID_Runner:
         curr_pos = msg.pose.pose.position
         self.update_err(curr_pos)
         # then, update the speed
-        self.speed.x = self.Kp * self.err
+        self.speed.linear.x = self.Kp * self.err
         self.cmd_vel_pub.publish(self.speed)
         # finally, check whether we should continue
         if (abs(self.err) <= ERR_EPSILON):
             # reached close enough to goal, stop everything
             self.run = False
-            self.speed.x = 0            
+            self.speed.linear.x = 0            
 
     def update_err(self, curr_pos):
         self.err = self.goal.x - curr_pos.x
