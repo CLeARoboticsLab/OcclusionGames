@@ -50,17 +50,51 @@ class PID_Runner:
             self.speed = 0
             self.throttle_pub.publish(self.speed)
 
-    def update_err(self, curr_pos):
-        self.err = self.goal.x - curr_pos
+    def run(self):
+        throttle_pub.publish(0.1)
+        go(0)
+        turn90()
+        go(1)
+        turn90()
+        go(0)
+        turn90()
+        go(1)
+        turn90()
+        throttle_pub.publish(0)
+
+    def turn90(self):
+        turn_time = 0.6
+        self.steering_pub(1)
+        start_time = time.time()
+        while True:
+            if (time.time() - start_time > turn_time):
+                break
+        self.steering_pub.publish(0)
+    
+    def go(self, side):
+        distance = 0
+        if side == 0:
+            # short side
+            distance = 2
+        else:
+            #long side
+            distance = 8
+        # calculate time to travel the distance
+        time_req = distance / (MAX_SPEED * 0.1)
+        start_time = time.time()
+        while True:
+            if (time.time() - start_time > time_req):
+                break
 
 if __name__ == "__main__":
     rospy.init_node("racecar_pid_runner", anonymous=True)
     pid_runner = PID_Runner()
-    rate = rospy.Rate(EXEC_RATE)
-    while pid_runner.run: # need to keep advancing toward goal
-        pid_runner.update()
-        st = time.time()
-        rate.sleep()
-        end = time.time()
-        pid_runner.sleep_time = (end - st) / 4
+    #rate = rospy.Rate(EXEC_RATE)
+    #while pid_runner.run: # need to keep advancing toward goal
+    #    pid_runner.update()
+    #    st = time.time()
+    #    rate.sleep()
+    #    end = time.time()
+    #    pid_runner.sleep_time = (end - st) / 4
+    pid_runner.run()
     rospy.spin() # shutdown this node
