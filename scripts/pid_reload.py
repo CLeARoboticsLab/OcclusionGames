@@ -7,7 +7,7 @@ import time
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 ERR_EPSILON = 0.1
-GOAL = [-3.0, -3.0]
+GOAL = [-3.0, 3.0]
 
 class PIDController:
     def __init__(self, kp, ki, kd):

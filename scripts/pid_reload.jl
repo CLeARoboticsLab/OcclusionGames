@@ -7,8 +7,9 @@ This is essentially a translated version of the existing Python script using the
 =#
 
 using RobotOS
-@rosimport std_msgs.msg: Float32
-@rosimport geometry_msgs.msg: PoseStamped
+using PyCall
+@rosimport std_msgs.msg.Float32
+@rosimport geometry_msgs.msg.PoseStamped
 rostypegen()
 
 using .std_msgs.msg
@@ -18,7 +19,7 @@ using LinearAlgebra
 
 const POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 const ERR_EPSILON = 0.1
-const GOAL = [-3.0, -3.0]
+const GOAL = [-3.0, 3.0]
 
 #=
 **** PIDCONTROLLER CLASS STUFF ****
@@ -77,8 +78,8 @@ end
 
 function JetRacerController()
     init_node("jetracer_pid_controller")
-    steering_pub = Publisher{Float32}("/jetracer/steering", queue_size=1)
-    throttle_pub = Publisher{Float32}("/jetracer/throttle", queue_size=1)
+    steering_pub = Publisher{Float32Msg}("/jetracer/steering", queue_size=1)
+    throttle_pub = Publisher{Float32Msg}("/jetracer/throttle", queue_size=1)
     controller = JetRacerController(
         steering_pub,
         throttle_pub,
@@ -86,7 +87,7 @@ function JetRacerController()
         PIDController(0.5, 0.0, 0.70),
         GOAL
     )
-    Subscriber(POSE_TOPIC, PoseStamped, msg -> pose_callback(controller, msg))
+    Subscriber(POSE_TOPIC, geometry_msgs.msg.PoseStamped, msg -> pose_callback(controller, msg))
     return controller
 end
 
@@ -107,10 +108,10 @@ function pose_callback(controller::JetRacerController, msg::PoseStamped)
     throttle = update!(controller.distance_pid, goal_dist)
 
     steering = clamp(steering, -1.0, 1.0)
-    throttle = goal_dist > ERR_EPSILON ? clamp(throttle, 0.0, 0.2) : 0.0
+    throttle = goal_dist > ERR_EPSILON ? clamp(throttle, 0.0, 0.17) : 0.0
 
-    publish(controller.steering_pub, Float32(data=steering))
-    publish(controller.throttle_pub, Float32(data=throttle))
+    publish(controller.steering_pub, Float32Msg(steering))
+    publish(controller.throttle_pub, Float32Msg(throttle))
 end
 
 
