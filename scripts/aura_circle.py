@@ -7,9 +7,9 @@ import time
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 ERR_EPSILON = 0.1
-RADIUS = 1.2
-CENTER = [-1.5, -1.5]
-CHASING_DIST = 0.2
+RADIUS = 0.75
+CENTER = [-1.5, 1.5]
+CHASING_DIST = 0.25
 
 class PIDController:
     def __init__(self, kp, ki, kd):
@@ -49,7 +49,7 @@ class JetRacerController:
         self.radius = RADIUS
         self.lookahead_distance = CHASING_DIST
 
-        self.heading_pid = PIDController(0.25, 0.0, 0.25)
+        self.heading_pid = PIDController(0.2, 0.075, 0.3)
         self.distance_pid = PIDController(0.5, 0.0, 0.1)
 
     # def pose_callback(self, msg):
@@ -103,7 +103,7 @@ class JetRacerController:
         heading_error = self.angle_wrap(goal_heading - yaw)
     
         steering = self.heading_pid.update(heading_error)
-        throttle = 0.15 if abs(radial_error) < 0.5 else 0.2  # Slightly faster until you get to the orbit
+        throttle = 0.15 if abs(radial_error) < 0.5 else 0.16  # Slightly faster until you get to the orbit
     
         steering = max(min(steering, 1.0), -1.0)
         self.steering_pub.publish(Float32(steering))
