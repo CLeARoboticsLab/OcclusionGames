@@ -30,7 +30,7 @@ class ViconLogger:
         rospy.Subscriber("/jetracer/steering", Float32, self.steering_callback)
 
     def vicon_callback(self, msg):
-
+        msg = msg.twist
         linear = msg.linear
         angular = msg.angular
         
@@ -53,10 +53,10 @@ class ViconLogger:
 
 
     def pose_callback(self, msg):
-        self.pose = msg
+        self.pose = msg.pose
 
     def accel_callback(self, msg):
-        self.accel = msg
+        self.accel = msg.accel
 
     def throttle_callback(self, msg):
         self.throttle = msg.data
