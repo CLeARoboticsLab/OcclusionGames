@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rospy
+import os
 import csv
 from std_msgs.msg import Float32
 from geometry_msgs.msg import PoseStamped, TwistStamped, AccelStamped
@@ -8,39 +9,46 @@ import math
 
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
-ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
+#ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
+THROTTLE_VALUE = 0.12
+STEERING_VALUE = 1.0
+X_STOP = 1.9
+T_STOP = 10
 
 
 class ViconLogger:
     def __init__(self):
-        self.logfile = open("data_log.csv", "w")
+        #print(os.getcwd())
+        self.logfile = open("dynamics_csv/log_" + str(THROTTLE_VALUE) + "_" + str(STEERING_VALUE) + ".csv", "w")
         self.writer = csv.writer(self.logfile)
-        self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity" ,"ax", "ay", "az", "acceleration", "throttle", "steering"])
+        self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity"])
+        init_pose = rospy.wait_for_message(POSE_TOPIC, PoseStamped)
+        self.position = init_pose.pose
+        self.start_time = rospy.get_time()
+        print("HI!")
 
-        self.throttle = 0.0
-        self.steering = 0.0
-        self.pose = None
-        self.accel = None
-
-        rospy.Subscriber(VEL_TOPIC, TwistStamped, self.vicon_callback) # I'll start by looking directly at the velocity provided by the vicon
+        self.throttle_pub = rospy.Publisher("/jetracer/throttle", Float32, queue_size=1)
+        self.steering_pub = rospy.Publisher("/jetracer/steering", Float32, queue_size=1)
+        self.throttle_pub.publish(Float32(THROTTLE_VALUE))
+        self.steering_pub.publish(Float32(STEERING_VALUE))
+        print("finished pubbing!")
+        self.vel_sub = rospy.Subscriber(VEL_TOPIC, TwistStamped, self.vicon_callback) # I'll start by looking directly at the velocity provided by the vicon
         # If it's garbage, we'll have to resort to some sort of finite difference scheme with the position
-        rospy.Subscriber(POSE_TOPIC, PoseStamped, self.pose_callback)
-        #rospy.Subscriber(ACCEL_TOPIC, AccelStamped, self.accel_callback)
-        rospy.Subscriber("/jetracer/throttle", Float32, self.throttle_callback)
-        rospy.Subscriber("/jetracer/steering", Float32, self.steering_callback)
+        self.pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.pose_callback)
 
     def vicon_callback(self, msg):
+
         msg = msg.twist
         linear = msg.linear
         angular = msg.angular
         
-        p = self.pose.position # Coordinates
-        q = self.pose.orientation # Angular position
+        p = self.position.position # Coordinates
+        q = self.position.orientation # Angular position
         
-        a = self.accel.linear
-
+        #a = self.acceleration.linear
+        
         velocity = math.hypot(linear.x, linear.y)
-        acceleration = math.hypot(a.x, a.y)
+        #acceleration = math.hypot(a.x, a.y)
 
         now = rospy.get_time()
 
@@ -48,15 +56,24 @@ class ViconLogger:
 
 
         print("I'm writing something")
-        self.writer.writerow([now, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity, a.x, a.y, a.z, acceleration, self.throttle, self.steering])
+        self.writer.writerow([now, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity])
         self.logfile.flush()
+        self.throttle_pub.publish(Float32(THROTTLE_VALUE))
+        self.steering_pub.publish(Float32(STEERING_VALUE))
 
 
     def pose_callback(self, msg):
-        self.pose = msg.pose
+        self.position = msg.pose
+        t = rospy.get_time()
+        if self.position.position.x >= X_STOP or t - self.start_time > T_STOP:
+            self.vel_sub.unregister()
+            self.pose_sub.unregister()
+            self.throttle_pub.publish(0)
+            self.steering_pub.publish(0)
+            print("ALL DONE!")
 
-    def accel_callback(self, msg):
-        self.accel = msg.accel
+    #def accel_callback(self, msg):
+        #self.acceleration = msg.accel
 
     def throttle_callback(self, msg):
         self.throttle = msg.data
