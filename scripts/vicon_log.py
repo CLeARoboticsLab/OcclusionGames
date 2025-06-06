@@ -15,7 +15,7 @@ class ViconLogger:
     def __init__(self):
         self.logfile = open("data_log.csv", "w")
         self.writer = csv.writer(self.logfile)
-        self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity" ,"ax", "ay", "az", "accleration" "throttle", "steering"])
+        self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity" ,"ax", "ay", "az", "acceleration", "throttle", "steering"])
 
         self.throttle = 0.0
         self.steering = 0.0
@@ -40,7 +40,7 @@ class ViconLogger:
         a = self.accel.linear
 
         velocity = math.hypot(linear.x, linear.y)
-        accleration = math.hypot(a.x, a.y)
+        acceleration = math.hypot(a.x, a.y)
 
         now = rospy.get_time()
 
@@ -59,10 +59,10 @@ class ViconLogger:
         self.accel = msg
 
     def throttle_callback(self, msg):
-        self.throtle = msg
+        self.throttle = msg.data
 
     def steering_callback(self, msg):
-        self.steering = msg
+        self.steering = msg.data
 
 
 def euler_from_quaternion(x, y, z, w):
