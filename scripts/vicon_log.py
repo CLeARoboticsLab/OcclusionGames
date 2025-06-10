@@ -10,9 +10,9 @@ import math
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
 #ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
-THROTTLE_VALUE = 0.12
-STEERING_VALUE = 1.0
-X_STOP = 1.9
+THROTTLE_VALUE = 0.5
+STEERING_VALUE = 0.04
+X_STOP = 3.0
 T_STOP = 10
 
 
