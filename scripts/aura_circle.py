@@ -10,6 +10,7 @@ ERR_EPSILON = 0.1
 RADIUS = 0.75
 CENTER = [-1.5, 1.5]
 CHASING_DIST = 0.25
+HEADING_BIAS = 0.04
 
 class PIDController:
     def __init__(self, kp, ki, kd):
@@ -49,8 +50,8 @@ class JetRacerController:
         self.radius = RADIUS
         self.lookahead_distance = CHASING_DIST
 
-        self.heading_pid = PIDController(0.2, 0.075, 0.3)
-        self.distance_pid = PIDController(0.5, 0.0, 0.1)
+        self.heading_pid = PIDController(0.3, 0, 0.02)
+        self.distance_pid = PIDController(0.35, 0.0, 0.7)
 
     # def pose_callback(self, msg):
     #     x = msg.pose.position.x
@@ -91,10 +92,11 @@ class JetRacerController:
     
         if abs(radial_error) > ERR_EPSILON:  # Phase 1: Converge to circle
             # Drive toward the closest point on the circle
+            print("Need to go to circle")
             target_x = self.center[0] + self.radius * math.cos(theta)
             target_y = self.center[1] + self.radius * math.sin(theta)
         else:  # Phase 2: Follow the circle
-            theta_target = theta + self.lookahead_distance / self.radius
+            theta_target = theta - self.lookahead_distance / self.radius
             target_x = self.center[0] + self.radius * math.cos(theta_target)
             target_y = self.center[1] + self.radius * math.sin(theta_target)
     
@@ -105,7 +107,7 @@ class JetRacerController:
         steering = self.heading_pid.update(heading_error)
         throttle = 0.15 if abs(radial_error) < 0.5 else 0.16  # Slightly faster until you get to the orbit
     
-        steering = max(min(steering, 1.0), -1.0)
+        steering = max(min(steering + HEADING_BIAS, 1.0), -1.0)
         self.steering_pub.publish(Float32(steering))
         self.throttle_pub.publish(Float32(throttle))
 

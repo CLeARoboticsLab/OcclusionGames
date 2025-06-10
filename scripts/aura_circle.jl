@@ -81,8 +81,8 @@ end
 
 function JetRacerController()
     init_node("jetracer_pid_controller")
-    steering_pub = Publisher{Float32}("/jetracer/steering", queue_size=1)
-    throttle_pub = Publisher{Float32}("/jetracer/throttle", queue_size=1)
+    steering_pub = Publisher{Float32Msg}("/jetracer/steering", queue_size=1)
+    throttle_pub = Publisher{Float32Msg}("/jetracer/throttle", queue_size=1)
     controller = JetRacerController(
         steering_pub,
         throttle_pub,
@@ -130,8 +130,8 @@ function pose_callback(controller::JetRacerController, msg::PoseStamped)
     steering = clamp(steering, -1.0, 1.0)
     throttle = abs(radial_error) < 0.5 ? 0.15 : 0.16
 
-    publish(controller.steering_pub, Float32(steering))
-    publish(controller.throttle_pub, Float32(throttle))
+    publish(controller.steering_pub, Float32Msg(steering))
+    publish(controller.throttle_pub, Float32Msg(throttle))
 end
 
 

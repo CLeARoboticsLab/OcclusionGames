@@ -6,8 +6,9 @@ import math
 import time
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
-ERR_EPSILON = 0.1
+ERR_EPSILON = 0.2
 GOAL = [-3.0, 3.0]
+HEADING_BIAS = 0.04
 
 class PIDController:
     def __init__(self, kp, ki, kd):
@@ -45,8 +46,8 @@ class JetRacerController:
 
         self.goal = GOAL  # example goal point in meters
 
-        self.heading_pid = PIDController(1.0, 0.0, 0.65)
-        self.distance_pid = PIDController(0.5, 0.0, 0.70) # Try pure proportinality first
+        self.heading_pid = PIDController(0.3, 0.0, 0.02)
+        self.distance_pid = PIDController(0.25, 0.0, 0.4) # Try pure proportinality first
 
     def pose_callback(self, msg):
         x = msg.pose.position.x
@@ -66,7 +67,7 @@ class JetRacerController:
         throttle = self.distance_pid.update(goal_dist)
 
         # Limit values
-        steering = max(min(steering, 1.0), -1.0)
+        steering = max(min(steering + HEADING_BIAS, 1.0), -1.0)
         throttle = max(min(throttle, 0.2), 0.0) if goal_dist > ERR_EPSILON else 0.0
 
         self.steering_pub.publish(Float32(steering))

@@ -18,8 +18,9 @@ using Dates
 using LinearAlgebra
 
 const POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
-const ERR_EPSILON = 0.1
+const ERR_EPSILON = 0.2
 const GOAL = [-3.0, 3.0]
+const HEADING_BIAS = 0.04
 
 #=
 **** PIDCONTROLLER CLASS STUFF ****
@@ -49,7 +50,7 @@ end
 
 function update!(pid::PIDController, error::Float64)
     current_time = nowtime()
-    dt = max(1e-6, Dates.value(current_time - pid.last_time) / 1e3)  # seconds
+    dt = Float32(Dates.value(Dates.DateTime(current_time) - Dates.DateTime(pid.last_time)))  # seconds
     de = error - pid.last_error
 
     pid.integral += error * dt
@@ -83,8 +84,8 @@ function JetRacerController()
     controller = JetRacerController(
         steering_pub,
         throttle_pub,
-        PIDController(1.0, 0.0, 0.65),
-        PIDController(0.5, 0.0, 0.70),
+        PIDController(0.25, 0.0, 0.02),
+        PIDController(0.1, 0.0, 0.5),
         GOAL
     )
     Subscriber(POSE_TOPIC, geometry_msgs.msg.PoseStamped, msg -> pose_callback(controller, msg))
@@ -107,7 +108,7 @@ function pose_callback(controller::JetRacerController, msg::PoseStamped)
     steering = update!(controller.heading_pid, heading_error)
     throttle = update!(controller.distance_pid, goal_dist)
 
-    steering = clamp(steering, -1.0, 1.0)
+    steering = clamp(steering + HEADING_BIAS, -1.0, 1.0)
     throttle = goal_dist > ERR_EPSILON ? clamp(throttle, 0.0, 0.17) : 0.0
 
     publish(controller.steering_pub, Float32Msg(steering))
