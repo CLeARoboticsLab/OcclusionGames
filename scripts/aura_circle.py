@@ -6,10 +6,10 @@ import math
 import time
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
-ERR_EPSILON = 0.1
+ERR_EPSILON = 0.05
 RADIUS = 0.75
 CENTER = [-1.5, 1.5]
-CHASING_DIST = 0.25
+CHASING_DIST = 0.2
 HEADING_BIAS = 0.04
 
 class PIDController:
@@ -50,7 +50,7 @@ class JetRacerController:
         self.radius = RADIUS
         self.lookahead_distance = CHASING_DIST
 
-        self.heading_pid = PIDController(0.3, 0, 0.02)
+        self.heading_pid = PIDController(0.15, 0, 0.02)
         self.distance_pid = PIDController(0.35, 0.0, 0.7)
 
     # def pose_callback(self, msg):
@@ -89,17 +89,19 @@ class JetRacerController:
         r = math.hypot(dx, dy)
         theta = math.atan2(dy, dx)
         radial_error = r - self.radius
+        target_x = 0
+        target_y = 0
     
         if abs(radial_error) > ERR_EPSILON:  # Phase 1: Converge to circle
             # Drive toward the closest point on the circle
-            print("Need to go to circle")
+            #print("Need to go to circle")
             target_x = self.center[0] + self.radius * math.cos(theta)
             target_y = self.center[1] + self.radius * math.sin(theta)
         else:  # Phase 2: Follow the circle
             theta_target = theta - self.lookahead_distance / self.radius
             target_x = self.center[0] + self.radius * math.cos(theta_target)
             target_y = self.center[1] + self.radius * math.sin(theta_target)
-    
+        print("Goal: (" + str(target_x) + ", " + str(target_y) + ")")
         # Steer toward the target
         goal_heading = math.atan2(target_y - y, target_x - x)
         heading_error = self.angle_wrap(goal_heading - yaw)
