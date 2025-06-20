@@ -56,7 +56,7 @@ class JetRacerController:
         self.radius = RADIUS
         self.lookahead_distance = CHASING_DIST
 
-        self.heading_pid = PIDController(0.15, 0, 0.02)
+        self.heading_pid = PIDController(0.15, 0.01, 0.02)
         self.distance_pid = PIDController(0.35, 0.0, 0.7)
 
     # def pose_callback(self, msg):
