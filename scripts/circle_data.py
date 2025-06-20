@@ -99,12 +99,12 @@ class JetRacerController:
 
         now = rospy.get_time()
 
+        radial_error = r - self.radius
         position_error = math.hypot(x - ideal_point[0], y - ideal_point[1])
-        self.writer.writerow([now - self.start_time, x, y, position_error])
+        self.writer.writerow([now - self.start_time, x, y, radial_error])
         self.logfile.flush()
 
-        radial_error = r - self.radius
-    
+            
         if abs(radial_error) > ERR_EPSILON:  # Phase 1: Converge to circle
             # Drive toward the closest point on the circle
             print("Need to go to circle")
