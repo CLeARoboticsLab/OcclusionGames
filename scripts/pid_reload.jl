@@ -34,7 +34,7 @@ mutable struct PIDController
     kd::Float64
     integral::Float64
     last_error::Float64
-    last_time::DateTime
+    last_time::Float64
 end
 
 function PIDController(kp, ki, kd)
@@ -50,7 +50,7 @@ end
 
 function update!(pid::PIDController, error::Float64)
     current_time = nowtime()
-    dt = Float32(Dates.value(Dates.DateTime(current_time) - Dates.DateTime(pid.last_time)))  # seconds
+    dt = current_time - pid.last_time # seconds
     de = error - pid.last_error
 
     pid.integral += error * dt
@@ -84,8 +84,8 @@ function JetRacerController()
     controller = JetRacerController(
         steering_pub,
         throttle_pub,
-        PIDController(0.25, 0.0, 0.02),
-        PIDController(0.1, 0.0, 0.5),
+        PIDController(0.2, 0.0, 0.04),
+        PIDController(0.23, 0.0, 0.4),
         GOAL
     )
     Subscriber(POSE_TOPIC, geometry_msgs.msg.PoseStamped, msg -> pose_callback(controller, msg))
@@ -102,8 +102,10 @@ function pose_callback(controller::JetRacerController, msg::PoseStamped)
     dx = controller.goal[1] - x
     dy = controller.goal[2] - y
     goal_dist = hypot(dx, dy)
-    goal_heading = atan(dy, dx)
+    goal_heading = atan2(dy, dx)
     heading_error = angle_wrap(goal_heading - yaw)
+    println("Heading error = $heading_error")
+    println("Distance to goal: $goal_dist")
 
     steering = update!(controller.heading_pid, heading_error)
     throttle = update!(controller.distance_pid, goal_dist)
@@ -133,7 +135,7 @@ end
 function euler_from_quaternion(x, y, z, w)
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = atan(t0, t1)
+    roll_x = atan2(t0, t1)
 
     t2 = +2.0 * (w * y - z * x)
     t2 = clamp(t2, -1.0, 1.0)
@@ -141,13 +143,13 @@ function euler_from_quaternion(x, y, z, w)
 
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = atan(t3, t4)
+    yaw_z = atan2(t3, t4)
 
     return roll_x, pitch_y, yaw_z
 end
 
 function nowtime()
-    return now(UTC)
+    return time()
 end
 
 # --- Main ---
