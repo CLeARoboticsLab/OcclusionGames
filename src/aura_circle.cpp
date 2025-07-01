@@ -1,12 +1,10 @@
-#include "ros/ros.h"
-#include "std_msgs/Float32.h"
-#include "geometry_msgs/PoseStamped.h"
+#include <ros/ros.h>
+#include <std_msgs/Float32.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <iostream>
+#define _USE_MATH_DEFINES
 #include <cmath>
 #include <chrono>
-#include <corecrt_math_defines.h>
-
-#define _USE_MATH_DEFINES
 
 const std::string POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose";
 const double ERR_EPSILON = 0.1;
@@ -116,11 +114,11 @@ class JetRacerController
             return /*roll_x, pitch_y,*/ yaw_z; // in radians
         }
 
-        void pose_callback(PoseStamped msg)
+        void pose_callback(geometry_msgs::PoseStamped::ConstPtr& msg)
         {
-            auto x = msg.pose.position.x;
-            auto y = msg.pose.position.y;
-            auto q = msg.pose.orientation;
+            auto x = msg->pose.position.x;
+            auto y = msg->pose.position.y;
+            auto q = msg->pose.orientation;
             // std::cout << "Postion: (" << x << ", " << y << ")\n";
             double yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w);
 
@@ -152,17 +150,21 @@ class JetRacerController
             double steering = heading_pid.update(heading_error);
             double throttle = abs(radial_error) < 0.5 ? 0.15 : 0.16; // Slightly faster until you get to the orbit
             steering = std::max(std::min(steering, 1.0), -1.0);
-            
-            steering_pub.publish(std_msgs::Float32(steering));
-            throttle_pub.publish(std_msgs::Float32(throttle));
+
+	    std_msgs::Float32 steering_msg;
+	    std_msgs::Float32 throttle_msg;
+	    steering_msg.data = steering;
+	    throttle_msg.data = throttle;
+            steering_pub.publish(steering_msg);
+            throttle_pub.publish(throttle_msg);
         }
     public:        
-        JetRacerController(ros::NodeHandler& nh)
+        JetRacerController(ros::NodeHandle& nh)
             : heading_pid(0.3, 0.0, 0.02), distance_pid(0.25, 0.0, 0.4)
         {
             steering_pub = nh.advertise<std_msgs::Float32>("/jetracer/steering", 1);
             throttle_pub = nh.advertise<std_msgs::Float32>("/jetracer/throttle", 1);
-            pose_sub = nh.subscribe(POSE_TOPIC, 1000, pose_callback);
+            pose_sub = nh.subscribe(POSE_TOPIC, 1000, &JetRacerController::pose_callback, this);
             center[0] = CENTER[0];
             center[1] = CENTER[1];
             radius = RADIUS;

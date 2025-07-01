@@ -10,6 +10,7 @@ project(jai_ali_pid_test)
 find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
+  geometry_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -203,3 +204,8 @@ include_directories(
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+add_executable(pid_reload src/pid_reload.cpp)
+target_link_libraries(pid_reload ${catkin_LIBRARIES})
+add_executable(aura_circle src/aura_circle.cpp)
+target_link_libraries(aura_circle ${catkin_LIBRARIES})

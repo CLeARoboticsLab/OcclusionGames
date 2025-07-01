@@ -1,9 +1,9 @@
 #include <ros/ros.h>
 #include <std_msgs/Float32.h>
 #include <geometry_msgs/PoseStamped.h>
+#define _USE_MATH_DEFINES
 #include <math.h>
 #include <iostream>
-#include <corecrt_math_defines.h>
 
 const std::string POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose";
 const double ERR_EPSILON = 0.1;
@@ -23,7 +23,7 @@ public:
 
     double update(double error) {
         ros::Time current_time = ros::Time::now();
-        double dt = (current_time - last_time_).toSec();
+        double dt = (current_time - last_time).toSec();
         double de = error - last_error;
 
         if (dt <= 0) dt = 1e-6;
