@@ -10,16 +10,18 @@ import math
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
 #ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
-THROTTLE_VALUE = 0.5
-STEERING_VALUE = 0.04
+THROTTLE_VALUE = 0.1
+SINE_AMP = 1
+SINE_FREQ = 3
 X_STOP = 3.0
 T_STOP = 10
+HEADING_BIAS = 0.04
 
 
 class ViconLogger:
     def __init__(self):
         #print(os.getcwd())
-        self.logfile = open("dynamics_csv/log_" + str(THROTTLE_VALUE) + "_" + str(STEERING_VALUE) + ".csv", "w")
+        self.logfile = open("dynamics_csv/sine_dynamics_fernando.csv", "w")
         self.writer = csv.writer(self.logfile)
         self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity"])
         init_pose = rospy.wait_for_message(POSE_TOPIC, PoseStamped)
@@ -28,8 +30,8 @@ class ViconLogger:
 
         self.throttle_pub = rospy.Publisher("/jetracer/throttle", Float32, queue_size=1)
         self.steering_pub = rospy.Publisher("/jetracer/steering", Float32, queue_size=1)
-        self.throttle_pub.publish(Float32(THROTTLE_VALUE))
-        self.steering_pub.publish(Float32(STEERING_VALUE))
+        #self.throttle_pub.publish(Float32(THROTTLE_VALUE))
+        #self.steering_pub.publish(Float32(STEERING_VALUE))
         self.vel_sub = rospy.Subscriber(VEL_TOPIC, TwistStamped, self.vicon_callback) # I'll start by looking directly at the velocity provided by the vicon
         # If it's garbage, we'll have to resort to some sort of finite difference scheme with the position
         self.pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.pose_callback)
@@ -52,12 +54,15 @@ class ViconLogger:
 
         _, _, yaw = euler_from_quaternion(q.x, q.y, q.z, q.w)
 
+        # calculate steering value
+        steering_value = SINE_AMP * math.sin(SINE_FREQ * (now - self.start_time)) + HEADING_BIAS
+        steering_value = max(-1, min(1, steering_value)) # clamp
 
-        print("I'm writing something")
+
         self.writer.writerow([now, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity])
         self.logfile.flush()
         self.throttle_pub.publish(Float32(THROTTLE_VALUE))
-        self.steering_pub.publish(Float32(STEERING_VALUE))
+        self.steering_pub.publish(Float32(steering_value))
 
 
     def pose_callback(self, msg):

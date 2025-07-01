@@ -102,7 +102,8 @@ function pose_callback(controller::JetRacerController, msg::PoseStamped)
     dx = controller.goal[1] - x
     dy = controller.goal[2] - y
     goal_dist = hypot(dx, dy)
-    goal_heading = atan2(dy, dx)
+    #println("Before atan2")
+    goal_heading = atan(dy, dx)
     heading_error = angle_wrap(goal_heading - yaw)
     println("Heading error = $heading_error")
     println("Distance to goal: $goal_dist")
@@ -135,7 +136,8 @@ end
 function euler_from_quaternion(x, y, z, w)
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = atan2(t0, t1)
+    #println("before atan2 euler")
+    roll_x = atan(t0, t1)
 
     t2 = +2.0 * (w * y - z * x)
     t2 = clamp(t2, -1.0, 1.0)
@@ -143,7 +145,7 @@ function euler_from_quaternion(x, y, z, w)
 
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = atan2(t3, t4)
+    yaw_z = atan(t3, t4)
 
     return roll_x, pitch_y, yaw_z
 end
