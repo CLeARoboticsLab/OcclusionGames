@@ -10,9 +10,9 @@ import math
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
 #ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
-THROTTLE_VALUE = 0.1
+THROTTLE_VALUE = 0.2
 SINE_AMP = 1
-SINE_FREQ = 3
+SINE_FREQ = 6
 X_STOP = 3.0
 T_STOP = 10
 HEADING_BIAS = 0.04
@@ -21,9 +21,9 @@ HEADING_BIAS = 0.04
 class ViconLogger:
     def __init__(self):
         #print(os.getcwd())
-        self.logfile = open("dynamics_csv/sine_dynamics_fernando.csv", "w")
+        self.logfile = open("dynamics_csv/faster_sine_dynamics_fernando.csv", "w")
         self.writer = csv.writer(self.logfile)
-        self.writer.writerow(["Time", "x", "y", "z", "yaw", "yaw_rate", "vx", "vy", "vz","velocity"])
+        self.writer.writerow(["Time", "steering", "throttle", "x", "y", "vx", "vy", "velocity", "yaw", "yaw_rate"])
         init_pose = rospy.wait_for_message(POSE_TOPIC, PoseStamped)
         self.position = init_pose.pose
         self.start_time = rospy.get_time()
@@ -59,7 +59,7 @@ class ViconLogger:
         steering_value = max(-1, min(1, steering_value)) # clamp
 
 
-        self.writer.writerow([now, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity])
+        self.writer.writerow([now - self.start_time, steering_value, THROTTLE_VALUE, p.x, p.y, linear.x, linear.y, velocity, yaw, angular.z])
         self.logfile.flush()
         self.throttle_pub.publish(Float32(THROTTLE_VALUE))
         self.steering_pub.publish(Float32(steering_value))
