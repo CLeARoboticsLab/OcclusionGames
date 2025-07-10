@@ -1,4 +1,4 @@
-#!usr/bin/env python3
+#!/usr/bin/env python3
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import csv
@@ -11,7 +11,7 @@ import time
 
 # Configuration
 CSV_FILE = "dynamics_csv/log_pidcircle.csv"
-UPDATE_INTERVAL = 100  # milliseconds
+UPDATE_INTERVAL = 5  # milliseconds
 MAX_POINTS = 1000  # Maximum points to display (for performance)
 
 # Initialize data storage
@@ -59,17 +59,17 @@ def read_csv_data(filename):
             errors = df['Error'].tolist()
             
             # Limit data points for performance
-            if len(timestamps) > MAX_POINTS:
-                timestamps = timestamps[-MAX_POINTS:]
-                x_exp = x_exp[-MAX_POINTS:]
-                y_exp = y_exp[-MAX_POINTS:]
-                errors = errors[-MAX_POINTS:]
+           # if len(timestamps) > MAX_POINTS:
+            #    timestamps = timestamps[-MAX_POINTS:]
+             #   x_exp = x_exp[-MAX_POINTS:]
+              #  y_exp = y_exp[-MAX_POINTS:]
+   #             errors = errors[-MAX_POINTS:]
             
             return True
     except (FileNotFoundError, pd.errors.EmptyDataError, KeyError) as e:
         print(f"Error reading CSV: {e}")
         return False
-    
+
     return False
 
 def animate(frame):
@@ -135,8 +135,7 @@ def main():
         print(f"Warning: {CSV_FILE} not found. Waiting for file to be created...")
     
     # Create animation
-    ani = FuncAnimation(fig, animate, interval=UPDATE_INTERVAL, 
-                       cache_frame_data=False, blit=False)
+    ani = FuncAnimation(fig, animate, interval=UPDATE_INTERVAL, blit=False)
     
     # Adjust layout
     plt.tight_layout()
