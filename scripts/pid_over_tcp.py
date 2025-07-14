@@ -2,7 +2,7 @@
 
 """
 Authors: Jai Nagaraj, Ali Chimoun
-This script is designed to execute PID Control on an NVIDIA JetRacer given goal coordinates.
+This script is designed to execute PID Control over a TCP connection to an NVIDIA JetRacer.
 """
 
 import rospy
@@ -11,12 +11,17 @@ from geometry_msgs.msg import PoseStamped
 import math
 import time
 import sys
+import socket
+import threading
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 ERR_EPSILON = 0.2
 GOAL = [0, 0]
 THETA = 0
 HEADING_BIAS = 0.04
+
+HOST = "192.168.50.32"
+PORT = 65432        # non-privileged port
 
 X_ARG = 1
 Y_ARG = 2
