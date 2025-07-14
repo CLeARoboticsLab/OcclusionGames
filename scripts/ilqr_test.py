@@ -50,11 +50,10 @@ def main(config_file):
   )
 
   pos0, psi0 = track.interp([2])  # Position and yaw on the track.
-  x_cur = np.array([3.3, 4.0, 0, np.pi / 2])  # Initial state.
+  x_cur = np.array([3.3, 4.0, 0, np.pi / 2])  # Initial state (x, y, v, psi)
   # x_cur = np.array([pos0[0], pos0[1], 0, psi0[-1]])
   init_control = np.zeros((2, config.N))
   t_total = 0.
-  plot_cover = False
 
   itr_receding = config.MAX_ITER_RECEDING  # The number of receding iterations.
   state_hist = np.zeros((4, itr_receding))

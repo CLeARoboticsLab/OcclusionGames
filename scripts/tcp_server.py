@@ -36,8 +36,9 @@ def handle_receive(conn):
         print(f"Throttle received: {json_obj["steering"]}\n")
 
         # output throttle, steering to jetracer
+        throttle_pub.publish()
 
-def handle_send(conn):
+def handle_send(conn, data):
     while True:
         msg = input("[Server]: ")
         conn.sendall(msg.encode())
