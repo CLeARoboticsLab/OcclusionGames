@@ -15,26 +15,27 @@ import socket
 import threading
 import json
 import rospy
-from std_msgs import Float32
-from geometry_msgs import PoseStamped, TwistStamped
+from std_msgs.msg import Float32
+from geometry_msgs.msg import PoseStamped, TwistStamped
 import math
 import time
 
 HOST = '0.0.0.0'  # localhost
 PORT = 65432        # non-privileged port
 
-POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
-TWIST_TOPIC = "vrpn_client_node/JaiAliJetRacer/twist"
+POSE_TOPIC = "vrpn_client_node/JaiAliJetRacerTwo/pose"
+TWIST_TOPIC = "vrpn_client_node/JaiAliJetRacerTwo/twist"
 THROTTLE_TOPIC = "/jetracer/throttle"
 STEERING_TOPIC = "/jetracer/steering"
 
 throttle_pub = None
 steering_pub = None
 pose_sub = None
-latest_x = 0
-latest_y = 0
-latest_v = 0
-latest_psi = 0
+latest_state = [None,None,None,None]
+LATEST_X = 0
+LATEST_Y = 1
+LATEST_V = 2
+LATEST_PSI = 3
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -60,21 +61,19 @@ def euler_from_quaternion(x, y, z, w):
 
 def pose_callback(data: PoseStamped):
     # update latest state stuff (except velocity)
-    global latest_x, latest_y, latest_v, latest_psi
-    latest_x = data.pose.position.x
-    latest_y = data.pose.position.y
-    _, _, latest_psi = euler_from_quaternion(
+    latest_state[LATEST_X] = data.pose.position.x
+    latest_state[LATEST_Y] = data.pose.position.y
+    _, _, latest_state[LATEST_PSI] = euler_from_quaternion(
         data.pose.orientation.x,
         data.pose.orientation.y,
-        data.pose.orientation.w,
-        data.pose.orientation.z
+        data.pose.orientation.z,
+        data.pose.orientation.w
     )
 
 def twist_callback(data: TwistStamped):
-    global latest_v
     v_x = data.twist.linear.x
     v_y = data.twist.linear.y
-    latest_v = math.hypot(v_x, v_y)
+    latest_state[LATEST_V] = math.hypot(v_x, v_y)
 
 def handle_receive(conn):
     while True:
@@ -84,17 +83,24 @@ def handle_receive(conn):
         decoded_data = data.decode("utf-8")
         if decoded_data == "get_pose":
             # requesting latest pose data
-            dict_to_send = {"x": latest_x, "y": latest_x, "v": latest_v, "psi": latest_psi}
+            while (latest_state[LATEST_X] is None) and (latest_state[LATEST_V] is None):
+                pass # waits for valid pose data to arrive
+            dict_to_send = {
+                "x": latest_state[LATEST_X],
+                "y": latest_state[LATEST_Y],
+                "v": latest_state[LATEST_V],
+                "psi": latest_state[LATEST_PSI]
+            }
             json_str_to_send = json.dumps(dict_to_send)
             conn.sendall(json_str_to_send.encode())
         else:
             # contains JSON with controls
             json_obj = json.loads(decoded_data)
-            print(f"Throttle received: {json_obj["throttle"]}")
-            print(f"Throttle received: {json_obj["steering"]}\n")
+            print(f"Throttle received: {json_obj['throttle']}")
+            print(f"Steering received: {json_obj['steering']}\n")
             # output throttle, steering to jetracer
-            throttle_pub.publish(Float32(float(json_obj["throttle"])))
-            steering_pub.publish(Float32(float(json_obj["steering"])))
+            throttle_pub.publish(Float32(float(json_obj['throttle'])))
+            steering_pub.publish(Float32(float(json_obj['steering'])))
 
 def main():
     global throttle_pub, steering_pub, pose_sub
