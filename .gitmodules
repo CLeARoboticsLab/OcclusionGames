@@ -1,0 +1,3 @@
+[submodule "iLQR_jax_racing"]
+	path = iLQR_jax_racing
+	url = https://github.com/SafeRoboticsLab/iLQR_jax_racing.git

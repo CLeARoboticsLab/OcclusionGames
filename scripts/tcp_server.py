@@ -6,6 +6,9 @@ This Python scipt sets up a TCP server for a JetRacer to receive steering and th
 as well as send out pose data for the JetRacer.
 Data is expected to be sent as: {"throttle": <float>, "steering": <float>}
 Data from this server is sent as: {"x": <float>, "y": <float>, "v": <float>, "psi": <float>}
+
+NOTE: Data is only sent when the message "get_pose" is received.
+
 """
 
 import socket
@@ -28,7 +31,10 @@ STEERING_TOPIC = "/jetracer/steering"
 throttle_pub = None
 steering_pub = None
 pose_sub = None
+latest_x = 0
+latest_y = 0
 latest_v = 0
+latest_psi = 0
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -52,6 +58,18 @@ def euler_from_quaternion(x, y, z, w):
     
     return roll_x, pitch_y, yaw_z # in radians
 
+def pose_callback(data: PoseStamped):
+    # update latest state stuff (except velocity)
+    global latest_x, latest_y, latest_v, latest_psi
+    latest_x = data.pose.position.x
+    latest_y = data.pose.position.y
+    _, _, latest_psi = euler_from_quaternion(
+        data.pose.orientation.x,
+        data.pose.orientation.y,
+        data.pose.orientation.w,
+        data.pose.orientation.z
+    )
+
 def twist_callback(data: TwistStamped):
     global latest_v
     v_x = data.twist.linear.x
@@ -64,21 +82,19 @@ def handle_receive(conn):
         if not data:
             break
         decoded_data = data.decode("utf-8")
-        json_obj = json.loads(decoded_data)
-        print(f"Throttle received: {json_obj["throttle"]}")
-        print(f"Throttle received: {json_obj["steering"]}\n")
-
-        # output throttle, steering to jetracer
-        throttle_pub.publish(Float32(float(json_obj["throttle"])))
-        steering_pub.publish(Float32(float(json_obj["steering"])))
-
-def handle_send(data: PoseStamped, args):
-    conn = args[0]
-    # create the JSON object
-    psi = euler_from_quaternion(data.pose.orientation.x, data.pose.orientation.y, data.pose.orientation.w,data.pose.orientation.z)
-    dict_to_send = {"x": data.pose.position.x, "y": data.pose.position.y, "v": latest_v, "psi": psi}
-    json_str_to_send = json.dumps(dict_to_send)
-    conn.sendall(json_str_to_send.encode())
+        if decoded_data == "get_pose":
+            # requesting latest pose data
+            dict_to_send = {"x": latest_x, "y": latest_x, "v": latest_v, "psi": latest_psi}
+            json_str_to_send = json.dumps(dict_to_send)
+            conn.sendall(json_str_to_send.encode())
+        else:
+            # contains JSON with controls
+            json_obj = json.loads(decoded_data)
+            print(f"Throttle received: {json_obj["throttle"]}")
+            print(f"Throttle received: {json_obj["steering"]}\n")
+            # output throttle, steering to jetracer
+            throttle_pub.publish(Float32(float(json_obj["throttle"])))
+            steering_pub.publish(Float32(float(json_obj["steering"])))
 
 def main():
     global throttle_pub, steering_pub, pose_sub
@@ -92,11 +108,10 @@ def main():
         conn, addr = s.accept()
         print(f"Connected by {addr}")
         # now that we have a connection, create pose and twist subscriber
-        pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, handle_send, callback_args=(conn))
+        pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, pose_callback)
         pose_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
 
         threading.Thread(target=handle_receive, args=(conn,), daemon=True).start()
-        handle_send(conn)
         rospy.spin()
 
 if __name__ == "__main__":
