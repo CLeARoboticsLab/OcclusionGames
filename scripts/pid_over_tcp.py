@@ -3,25 +3,24 @@
 """
 Authors: Jai Nagaraj, Ali Chimoun
 This script is designed to execute PID Control over a TCP connection to an NVIDIA JetRacer.
+Data is expected to be sent as: {"x": <float>, "y": <float>, "v": <float>, "psi": <float>}
+Data from this server is sent as: {"throttle": <float>, "steering": <float>}
 """
 
-import rospy
-from std_msgs.msg import Float32
-from geometry_msgs.msg import PoseStamped
 import math
 import time
 import sys
 import socket
-import threading
+import json
 
-POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 ERR_EPSILON = 0.2
-GOAL = [0, 0]
+GOAL = [-3, 3]
 THETA = 0
 HEADING_BIAS = 0.04
 
-HOST = "192.168.50.32"
+HOST = "192.168.50.236"
 PORT = 65432        # non-privileged port
+RECV_CODE = "get_pose"
 
 X_ARG = 1
 Y_ARG = 2
@@ -55,40 +54,48 @@ class PIDController:
         return output
 
 class JetRacerController:
-    def __init__(self):
-        rospy.init_node('jetracer_pid_controller')
-        self.steering_pub = rospy.Publisher('/jetracer/steering', Float32, queue_size=1)
-        self.throttle_pub = rospy.Publisher('/jetracer/throttle', Float32, queue_size=1)
-        rospy.Subscriber(POSE_TOPIC, PoseStamped, self.pose_callback)
-
+    def __init__(self, conn):
         self.goal = GOAL  # example goal point in meters
 
-        self.heading_pid = PIDController(0.3, 0.0, 0.02)
-        self.distance_pid = PIDController(0.25, 0.0, 0.4) # Try pure proportinality first
+        self.heading_pid = PIDController(0.4, 0.0, 0.04)
+        self.distance_pid = PIDController(0.5, 0.0, 0.35) # Try pure proportinality first
+        self.conn = conn
 
-    def pose_callback(self, msg):
-        x = msg.pose.position.x
-        y = msg.pose.position.y
-        print('Postion: ', x, y)
-        q = msg.pose.orientation
-        _, _, yaw = euler_from_quaternion(q.x, q.y, q.z, q.w)
+    def control(self):
+        # Infinite loop to get to goal
+        while True:
+            # first, get pose information
+            self.conn.sendall(RECV_CODE.encode("utf-8"))
+            raw_pose_data = self.conn.recv(1024).decode()
+            pose_dict = json.loads(raw_pose_data)
+            x = pose_dict['x']
+            y = pose_dict['y']
+            print('Postion:', x, y)
+            yaw = pose_dict['psi']
+            print('Heading:', yaw)
 
-        dx = self.goal[0] - x
-        dy = self.goal[1] - y
-        goal_dist = math.hypot(dx, dy)
-        goal_heading = math.atan2(dy, dx)
-        heading_error = self.angle_wrap(goal_heading - yaw)
+            dx = self.goal[0] - x
+            dy = self.goal[1] - y
+            goal_dist = math.hypot(dx, dy)
+            goal_heading = math.atan2(dy, dx)
+            heading_error = self.angle_wrap(goal_heading - yaw)
 
-        # Compute control
-        steering = self.heading_pid.update(heading_error)
-        throttle = self.distance_pid.update(goal_dist)
+            # Compute control
+            steering = self.heading_pid.update(heading_error)
+            throttle = self.distance_pid.update(goal_dist)
 
-        # Limit values
-        steering = max(min(steering + HEADING_BIAS, 1.0), -1.0)
-        throttle = max(min(throttle, 0.2), 0.0) if goal_dist > ERR_EPSILON else 0.0
+            # Limit values
+            steering = max(min(steering + HEADING_BIAS, 1.0), -1.0)
+            throttle = max(min(throttle, 0.2), 0.0) if goal_dist > ERR_EPSILON else 0.0
 
-        self.steering_pub.publish(Float32(steering))
-        self.throttle_pub.publish(Float32(throttle))
+            # Send values over TCP
+            print("Throttle sent:", throttle)
+            print("Steering sent:", steering, '\n')
+            control_dict = {'throttle': throttle, 'steering': steering}
+            control_str = json.dumps(control_dict) # converts dict to json string
+            self.conn.sendall(control_str.encode("utf-8"))
+            #time.sleep(0.01) # delay so that we don't bombard the server
+        
 
     def angle_wrap(self, angle):
         while angle > math.pi:
@@ -97,40 +104,22 @@ class JetRacerController:
             angle += 2 * math.pi
         return angle
 
-def euler_from_quaternion(x, y, z, w):
-        """
-        Convert a quaternion into euler angles (roll, pitch, yaw)
-        roll is rotation around x in radians (counterclockwise)
-        pitch is rotation around y in radians (counterclockwise)
-        yaw is rotation around z in radians (counterclockwise)
-        """
-        t0 = +2.0 * (w * x + y * z)
-        t1 = +1.0 - 2.0 * (x * x + y * y)
-        roll_x = math.atan2(t0, t1)
-     
-        t2 = +2.0 * (w * y - z * x)
-        t2 = +1.0 if t2 > +1.0 else t2
-        t2 = -1.0 if t2 < -1.0 else t2
-        pitch_y = math.asin(t2)
-     
-        t3 = +2.0 * (w * z + x * y)
-        t4 = +1.0 - 2.0 * (y * y + z * z)
-        yaw_z = math.atan2(t3, t4)
-     
-        return roll_x, pitch_y, yaw_z # in radians
-
 def main(argc, argv):
     #if argc != 3:
     #    print("USAGE: python3 pid_official.py [x_coordinate] [y_coordinate] [theta]")
     #    return
-    if argc != 2:
-        print("USAGE: python3 pid_official.py [x_coordinate] [y_coordinate]")
-        return
-    GOAL[0] = argv[X_ARG]
-    GOAL[1] = argv[Y_ARG]
+    #if argc != 2:
+    #    print("USAGE: python3 pid_official.py [x_coordinate] [y_coordinate]")
+    #    return
+    #GOAL[0] = argv[X_ARG]
+    #GOAL[1] = argv[Y_ARG]
     #THETA = kwargs[THETA_ARG]
-    controller = JetRacerController()
-    rospy.spin()
+
+    # connect to Jetson TCP server
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((HOST, PORT))
+        controller = JetRacerController(client_socket)
+        controller.control()
 
 if __name__ == '__main__':
     main(len(sys.argv), sys.argv)
