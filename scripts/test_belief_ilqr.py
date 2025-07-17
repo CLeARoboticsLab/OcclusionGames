@@ -20,6 +20,14 @@ import sys
 sys.path.append("C:\\Users\\jaivn\\Desktop\\OcclusionGameRepo")
 from belief_ilqr_solver.solver import iLQR  # ← keep consistent with your repo
 
+# imports for TCP
+import socket
+import json
+
+HOST = "192.168.50.236"
+PORT = 65432
+RECV_CODE = "get_pose"
+
 
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
@@ -113,6 +121,23 @@ print(f"Success flag   : {success}")
 print(f"Final state    : {states_np[-1]}")
 print(f"Distance to 0  : {jnp.linalg.norm(states_np[-1][:2]):.4f}  m")
 
+# --------------------------------------------------------------------------- #
+# 4.  Send/execute controls over TCP
+# --------------------------------------------------------------------------- #
+with socket.sock(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+    client_socket.connect((HOST, PORT)) # connect to server
+    for control in controls_np: # iterate over all controls
+        curr_throttle = control[0]
+        curr_steering = control[1]
+        # clip controls if not already
+        curr_throttle = min(1, max(-1, curr_throttle))
+        curr_steering = min(1, max(-1, curr_steering))
+        # send data over the network
+        control_dict = {"throttle": curr_throttle, "steering": curr_steering}
+        json_str = json.dumps(control_dict)
+        client_socket.sendall(json_str.encode("utf-8"))
+        # now, wait for dt number of ms to send the next command
+        time.sleep(dt)
 
 # --------------------------------------------------------------------------- #
 # 4.  Plots
