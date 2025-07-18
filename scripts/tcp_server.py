@@ -31,7 +31,7 @@ STEERING_TOPIC = "/jetracer/steering"
 throttle_pub = None
 steering_pub = None
 pose_sub = None
-latest_state = [None,None,None,None]
+latest_state = [None,None,0,None]
 LATEST_X = 0
 LATEST_Y = 1
 LATEST_V = 2
@@ -83,8 +83,9 @@ def handle_receive(conn):
         decoded_data = data.decode("utf-8")
         if decoded_data == "get_pose":
             # requesting latest pose data
-            while (latest_state[LATEST_X] is None) and (latest_state[LATEST_V] is None):
-                pass # waits for valid pose data to arrive
+            while (latest_state[LATEST_X] is None):
+                print("waiting...")
+                time.sleep(0.5) # waits for valid pose data to arrive
             dict_to_send = {
                 "x": latest_state[LATEST_X],
                 "y": latest_state[LATEST_Y],
@@ -115,7 +116,7 @@ def main():
         print(f"Connected by {addr}")
         # now that we have a connection, create pose and twist subscriber
         pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, pose_callback)
-        pose_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
+        #twist_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
 
         threading.Thread(target=handle_receive, args=(conn,), daemon=True).start()
         rospy.spin()
