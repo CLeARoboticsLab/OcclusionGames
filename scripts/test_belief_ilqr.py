@@ -10,6 +10,7 @@ pip install "jax[cpu]" matplotlib
 from functools import partial
 import jax
 import jax.numpy as jnp
+import math
 import matplotlib.pyplot as plt
 import time
 
@@ -38,10 +39,11 @@ n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
-B_U = 18.0  # m/s² (≈0.2 g per unit throttle)
-B_DELTA = 0.4
-THROTTLE_MIN = 0.05
-
+B_U = 8.0  # m/s² (≈0.2 g per unit throttle)
+B_DELTA = 1
+THROTTLE_MAX = 0.5 # max throttle without slipping
+HEADING_BIAS = -0.1  # steering bias
+SQUISH_RATE = 0.01  # squish rate for throttle
 
 @jax.jit
 def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
@@ -54,7 +56,9 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     x, y, vx, th = state
     u_raw, delta_raw = control
     # clip controls
-    #u_raw = jnp.clip(u_raw, THROTTLE_MIN, 1.0)
+    u_raw = jnp.clip(u_raw, -1, THROTTLE_MAX)
+    #u_raw = u_raw * (1 - math.e ** ((-u_raw ** 2) / (SQUISH_RATE ** 2))) # squishes values near zero to nearer zero
+    delta_raw = jnp.clip(delta_raw + HEADING_BIAS, -1, 1)
 
     # compute state changes
     x_dot = vx * jnp.cos(th)
