@@ -10,15 +10,16 @@ pip install "jax[cpu]" matplotlib
 from functools import partial
 import jax
 import jax.numpy as jnp
+import math
 import matplotlib.pyplot as plt
 import time
 
 # --------------------------------------------------------------------------- #
 # 0.  Import your solver (change path if needed)
 # --------------------------------------------------------------------------- #
-import sys
-sys.path.append("C:\\Users\\jaivn\\Desktop\\OcclusionGameRepo")
-from belief_ilqr_solver.solver import iLQR  # ← keep consistent with your repo
+import sys, os
+sys.path.append(os.path.join(os.path.dirname(sys.path[0]), "belief_ilqr_solver"))
+from solver import iLQR  # ← keep consistent with your repo
 
 # imports for TCP
 import socket
@@ -32,25 +33,46 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.1  # [s]  integration step
+dt = 0.5  # [s]  integration step
 T = 30  # horizon length
-n, m = 3, 2  # state & control sizes
+n, m = 4, 2  # state & control sizes
 
+MASS = 2.5  # kg
+LENGTH = 0.26 # wheelbase
+B_U = 8.0  # m/s² (≈0.2 g per unit throttle)
+B_DELTA = 1
+THROTTLE_MAX = 0.5 # max throttle without slipping
+HEADING_BIAS = -0.1  # steering bias
+SQUISH_RATE = 0.01  # squish rate for throttle
 
 @jax.jit
 def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     """
-    Unicycle discrete-time dynamics
-    state   = [x, y, θ]
-    control = [v, ω]      (linear & angular velocity commands)
+    Bicycle discrete-time dynamics for JetRacer
+    state   = [x, y, v, θ]
+    control = [u, δ]      <-- throttle and steering commands
     """
-    x, y, th = state
-    v, w = control
+    # unpack state, control
+    x, y, vx, th = state
+    u_raw, delta_raw = control
+    # clip controls
+    u_raw = jnp.clip(u_raw, -1, THROTTLE_MAX)
+    #u_raw = u_raw * (1 - math.e ** ((-u_raw ** 2) / (SQUISH_RATE ** 2))) # squishes values near zero to nearer zero
+    delta_raw = jnp.clip(delta_raw + HEADING_BIAS, -1, 1)
 
-    x_next = x + dt * v * jnp.cos(th)
-    y_next = y + dt * v * jnp.sin(th)
-    th_next = th + dt * w
-    return jnp.array([x_next, y_next, th_next])
+    # compute state changes
+    x_dot = vx * jnp.cos(th)
+    y_dot = vx * jnp.sin(th)
+    vx_dot = B_U * u_raw
+    th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
+
+    # update state
+    x_next = x + x_dot * dt
+    y_next = y + y_dot * dt
+    v_next = vx + vx_dot * dt
+    th_next = th + th_dot * dt
+
+    return jnp.array([x_next, y_next, v_next, th_next])
 
 
 # -- single-step quadratic-ish cost -------------------------------------------------
@@ -95,45 +117,52 @@ def build_unicycle_cost(w_pos=1.0, w_th=0.1, w_u=1e-2, term_weight=100.0):
 
 cost = build_unicycle_cost(term_weight=100.0)
 
-# --------------------------------------------------------------------------- #
-# 2.  Problem setup
-# --------------------------------------------------------------------------- #
-x0 = jnp.array([-6.0, 10.0, 0.9])  # initial state
-u_init = jnp.zeros((T, m))  # zero-controls guess
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+    # --------------------------------------------------------------------------- #
+    # 2.  Problem setup
+    # --------------------------------------------------------------------------- #
+    # get pose information from the server
+    client_socket.connect((HOST, PORT)) 
+    client_socket.sendall(RECV_CODE.encode("utf-8"))
+    data = client_socket.recv(1024).decode("utf-8")
+    pose_data = json.loads(data)
+    x0 = jnp.array([pose_data["x"], pose_data["y"], 0, pose_data["psi"]])  # initial state
+    u_init = jnp.zeros((T, m))  # zero-controls guess
+    print(f"Initial state: {x0}")
 
-# Instantiate solver
-dims = {"state": n, "control": m}
-ilqr = iLQR(cost, dynamics, T, dims)
+    # Instantiate solver
+    dims = {"state": n, "control": m}
+    ilqr = iLQR(cost, dynamics, T, dims)
 
-# --------------------------------------------------------------------------- #
-# 3.  Solve
-# --------------------------------------------------------------------------- #
-start_time = time.time()
-(states, controls), (success, stats) = ilqr.solve(x0, u_init)
+    # --------------------------------------------------------------------------- #
+    # 3.  Solve
+    # --------------------------------------------------------------------------- #
+    start_time = time.time()
+    (states, controls), (success, stats) = ilqr.solve(x0, u_init)
 
-ilqr.print_stats(stats.block_until_ready())
-print(f"iLQR solve time: {time.time() - start_time:.2f} s")
+    ilqr.print_stats(stats.block_until_ready())
+    print(f"iLQR solve time: {time.time() - start_time:.2f} s")
 
-states_np = jax.device_get(states)
-controls_np = jax.device_get(controls)
+    states_np = jax.device_get(states)
+    controls_np = jax.device_get(controls)
 
-print(f"Success flag   : {success}")
-print(f"Final state    : {states_np[-1]}")
-print(f"Distance to 0  : {jnp.linalg.norm(states_np[-1][:2]):.4f}  m")
+    print(f"Success flag   : {success}")
+    print(f"Final state    : {states_np[-1]}")
+    print(f"Distance to 0  : {jnp.linalg.norm(states_np[-1][:2]):.4f}  m")
 
-# --------------------------------------------------------------------------- #
-# 4.  Send/execute controls over TCP
-# --------------------------------------------------------------------------- #
-with socket.sock(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-    client_socket.connect((HOST, PORT)) # connect to server
+    # --------------------------------------------------------------------------- #
+    # 4.  Send/execute controls over TCP
+    # --------------------------------------------------------------------------- #
     for control in controls_np: # iterate over all controls
-        curr_throttle = control[0]
-        curr_steering = control[1]
+        curr_throttle = float(control[0])
+        curr_steering = float(control[1])
         # clip controls if not already
         curr_throttle = min(1, max(-1, curr_throttle))
         curr_steering = min(1, max(-1, curr_steering))
         # send data over the network
         control_dict = {"throttle": curr_throttle, "steering": curr_steering}
+        print("Unclipped control:", control)
+        print("Clipped control:", control_dict)
         json_str = json.dumps(control_dict)
         client_socket.sendall(json_str.encode("utf-8"))
         # now, wait for dt number of ms to send the next command
