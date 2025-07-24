@@ -31,7 +31,7 @@ class DataCollector:
     def twist_callback(self, msg):
         self.latest_twist = [msg.twist.linear.x, msg.twist.linear.y, msg.twist.angular.z]
 
-    def euler_from_quaternion(x, y, z, w):
+    def euler_from_quaternion(self, x, y, z, w):
         """
         Convert a quaternion into euler angles (roll, pitch, yaw)
         roll is rotation around x in radians (counterclockwise)

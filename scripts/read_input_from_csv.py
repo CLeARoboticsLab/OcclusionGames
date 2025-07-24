@@ -5,7 +5,7 @@ from std_msgs.msg import Float32
 from geometry_msgs.msg import PoseStamped, TwistStamped
 import csv
 import sys
-import DataCollector
+from DataCollector import DataCollector
 import math
 
 CSV_LOGFILE = "dynamics_csv/nguyen_sine_exp_dynamics.csv"
