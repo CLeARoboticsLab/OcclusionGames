@@ -22,6 +22,8 @@ import time
 
 HOST = '0.0.0.0'  # localhost
 PORT = 65432        # non-privileged port
+SEND_POSE_CODE = "get_pose"
+STOP_CODE = "STOP"
 
 POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
 TWIST_TOPIC = "vrpn_client_node/JaiAliJetRacer/twist"
@@ -79,9 +81,10 @@ def handle_receive(conn):
     while True:
         data = conn.recv(1024)
         if not data:
+            print("No data received, closing connection...")
             break
         decoded_data = data.decode("utf-8")
-        if decoded_data == "get_pose":
+        if decoded_data == SEND_POSE_CODE:
             # requesting latest pose data
             while (latest_state[LATEST_X] is None):
                 print("waiting...")
@@ -94,6 +97,12 @@ def handle_receive(conn):
             }
             json_str_to_send = json.dumps(dict_to_send)
             conn.sendall(json_str_to_send.encode())
+        elif decoded_data == STOP_CODE:
+            # Stop the subscribers and close the connection
+            print("Closing connection...")
+            conn.close()
+            print("Connection closed.")
+            break
         else:
             # contains JSON with controls
             json_obj = json.loads(decoded_data)
@@ -102,24 +111,25 @@ def handle_receive(conn):
             # output throttle, steering to jetracer
             throttle_pub.publish(Float32(float(json_obj['throttle'])))
             steering_pub.publish(Float32(float(json_obj['steering'])))
+    print("Exiting receive handler...")
 
 def main():
     global throttle_pub, steering_pub, pose_sub
     rospy.init_node("tcp_jetracer_server")
     throttle_pub = rospy.Publisher(THROTTLE_TOPIC, Float32, queue_size=1)
     steering_pub = rospy.Publisher(STEERING_TOPIC, Float32, queue_size=1)
+    pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, pose_callback)
+    #twist_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, PORT))
         s.listen()
         print(f"Server listening on {HOST}:{PORT}...")
-        conn, addr = s.accept()
-        print(f"Connected by {addr}")
-        # now that we have a connection, create pose and twist subscriber
-        pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, pose_callback)
-        #twist_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
-
-        threading.Thread(target=handle_receive, args=(conn,), daemon=True).start()
-        rospy.spin()
+        while not rospy.is_shutdown():
+            print("Waiting for a new connection...")
+            conn, addr = s.accept()
+            print(f"Connected by {addr}")
+            threading.Thread(target=handle_receive, args=(conn,), daemon=True).start()
+    rospy.spin()
 
 if __name__ == "__main__":
     main()
