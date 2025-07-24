@@ -33,19 +33,20 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.5  # [s]  integration step
-T = 30  # horizon length
+dt = 0.1  # [s]  integration step
+T = 20  # horizon length
 n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
-B_U = 4.5  # m/s² (≈0.2 g per unit throttle)
-B_DELTA = 0.4601
-THROTTLE_MAX = 0.5 # max throttle without slipping
-HEADING_BIAS = 0.055  # steering bias
-U_L = 1.5
-U_A = 0.5
-U_B = 4.1
+B_U_1 = 8.0  # m/s² (≈0.2 g per unit throttle)
+B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
+B_DELTA = 0.4
+THROTTLE_MAX = 0.25 # max throttle without slipping
+HEADING_BIAS = -0.2  # steering bias
+U_L = 1.25
+U_A = 0.25
+U_B = 15
 
 @jax.jit
 def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
@@ -58,14 +59,14 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     x, y, vx, th = state
     u_raw, delta_raw = control
     # clip controls
-    u_raw = U_L / (1 + U_A * math.e ** (-U_B * u_raw)) - 1  # squashes throttle to a range
-    #u_raw = u_raw * (1 - math.e ** ((-u_raw ** 2) / (SQUISH_RATE ** 2))) # squishes values near zero to nearer zero
+    u_raw = U_L / (1 + U_A * math.e ** (-U_B * u_raw)) - 1  # squashes throttle via sigmoid
     delta_raw += HEADING_BIAS
+    delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
     # compute state changes
     x_dot = vx * jnp.cos(th)
     y_dot = vx * jnp.sin(th)
-    vx_dot = B_U * u_raw
+    vx_dot = B_U_1 * u_raw
     th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
 
     # update state
@@ -78,7 +79,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
 
 
 # -- single-step quadratic-ish cost -------------------------------------------------
-w_pos, w_th, w_u = 1.0, 0.1, 1.0
+w_pos, w_th, w_u = 1.0, 1.0, 10.0
 
 
 def stage_cost(x, u):
@@ -117,7 +118,7 @@ def build_unicycle_cost(w_pos=1.0, w_th=0.1, w_u=1e-2, term_weight=100.0):
     return {"stage": stage_cost, "terminal": terminal_cost, "traj": traj_cost}
 
 
-cost = build_unicycle_cost(term_weight=100.0)
+cost = build_unicycle_cost(w_pos=w_pos, w_th=w_th, w_u=w_u, term_weight=300.0)
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # --------------------------------------------------------------------------- #
@@ -155,16 +156,18 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # --------------------------------------------------------------------------- #
     # 4.  Send/execute controls over TCP
     # --------------------------------------------------------------------------- #
-    for control in controls_np: # iterate over all controls
+    for state, control in zip(states_np, controls_np): # iterate over all controls
         curr_throttle = float(control[0])
         curr_steering = float(control[1])
         # clip controls if not already
-        curr_throttle = min(1, max(-1, curr_throttle))
+        curr_throttle = min(THROTTLE_MAX, max(-1, curr_throttle))
         curr_steering = min(1, max(-1, curr_steering))
         # send data over the network
         control_dict = {"throttle": curr_throttle, "steering": curr_steering}
+        print("State:", state)
         print("Unclipped control:", control)
         print("Clipped control:", control_dict)
+        print()
         json_str = json.dumps(control_dict)
         client_socket.sendall(json_str.encode("utf-8"))
         # now, wait for dt number of ms to send the next command
