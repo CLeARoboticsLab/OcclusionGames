@@ -39,11 +39,13 @@ n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
-B_U = 8.0  # m/s² (≈0.2 g per unit throttle)
-B_DELTA = 1
+B_U = 4.5  # m/s² (≈0.2 g per unit throttle)
+B_DELTA = 0.4601
 THROTTLE_MAX = 0.5 # max throttle without slipping
-HEADING_BIAS = -0.1  # steering bias
-SQUISH_RATE = 0.01  # squish rate for throttle
+HEADING_BIAS = 0.055  # steering bias
+U_L = 1.5
+U_A = 0.5
+U_B = 4.1
 
 @jax.jit
 def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
@@ -56,9 +58,9 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     x, y, vx, th = state
     u_raw, delta_raw = control
     # clip controls
-    u_raw = jnp.clip(u_raw, -1, THROTTLE_MAX)
+    u_raw = U_L / (1 + U_A * math.e ** (-U_B * u_raw)) - 1  # squashes throttle to a range
     #u_raw = u_raw * (1 - math.e ** ((-u_raw ** 2) / (SQUISH_RATE ** 2))) # squishes values near zero to nearer zero
-    delta_raw = jnp.clip(delta_raw + HEADING_BIAS, -1, 1)
+    delta_raw += HEADING_BIAS
 
     # compute state changes
     x_dot = vx * jnp.cos(th)
@@ -76,7 +78,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
 
 
 # -- single-step quadratic-ish cost -------------------------------------------------
-w_pos, w_th, w_u = 1.0, 0.1, 1e-2
+w_pos, w_th, w_u = 1.0, 0.1, 1.0
 
 
 def stage_cost(x, u):
