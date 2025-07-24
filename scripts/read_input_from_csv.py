@@ -5,23 +5,10 @@ from std_msgs.msg import Float32
 from geometry_msgs.msg import PoseStamped, TwistStamped
 import csv
 import sys
+import DataCollector
+import math
 
-class DataCollector:
-    def __init__(self):
-        self.pose_sub = rospy.Subscriber('/vrpn_client_node/JaiAliJetRacer/pose', PoseStamped, pose_callback)
-        self.twist_sub = rospy.Subscriber('/vrpn_client_node/JaiAliJetRacer/twist', TwistStamped, twist_callback)
-        self.latest_pose = [0, 0, 0] # [x, y, psi]
-        self.latest_twist = [0, 0, 0] # [vx, vy, psi_dot]
-    def pose_callback(self, msg):
-        _, _, psi = euler_from_quaternion(
-            msg.pose.orientation.x,
-            msg.pose.orientation.y,
-            msg.pose.orientation.z,
-            msg.pose.orientation.w
-        )
-        self.latest_pose = [msg.pose.position.x, msg.pose.position.y, psi]
-    def twist_callback(self, msg):
-        self.latest_twist = [msg.twist.linear.x, msg.twist.linear.y, msg.twist.angular.z]
+CSV_LOGFILE = "dynamics_csv/nguyen_sine_exp_dynamics.csv"
 
 def publish_from_csv(csv_path, rate_hz=100):
     # Initialize ROS node
@@ -31,39 +18,58 @@ def publish_from_csv(csv_path, rate_hz=100):
     throttle_pub = rospy.Publisher('/jetracer/throttle', Float32, queue_size=10)
     steering_pub = rospy.Publisher('/jetracer/steering', Float32, queue_size=10)
 
-    # Define subscribers
+    # Start data collector
     data_collector = DataCollector()
 
-    # Prepare CSV logfile
-
-
+    # Prepare CSV logfile for data collection
     try:
-        with open(csv_path, 'r') as csvfile:
-            reader = csv.DictReader(csvfile)
-            if 'u' not in reader.fieldnames or 'delta' not in reader.fieldnames:
-                rospy.logerr("CSV must contain 'u' and 'delta' columns.")
-                return
+        with open(CSV_LOGFILE, 'w') as logfile:
+            writer = csv.writer(logfile)
+            writer.writerow(['Time', 'steering', 'throttle', 'x', 'y', 'vx', 'vy', 'velocity', 'yaw', 'yaw_rate'])
+            # Get initial time to compare to
+            start_time = rospy.get_time()
+            try:
+                with open(csv_path, 'r') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    if 'u' not in reader.fieldnames or 'delta' not in reader.fieldnames:
+                        rospy.logerr("CSV must contain 'u' and 'delta' columns.")
+                        return
+                    # Set rate
+                    rate = rospy.Rate(rate_hz)
+                    for row in reader:
+                        if rospy.is_shutdown():
+                            break
+                        try:
+                            throttle_val = float(row['u'])
+                            steering_val = float(row['delta'])
+                        except ValueError:
+                            rospy.logwarn("Invalid row skipped: %s", row)
+                            continue
 
-            rospy.loginfo("Publishing throttle (u) and steering (delta) data at {} Hz...".format(rate_hz))
-            for row in reader:
-                if rospy.is_shutdown():
-                    break
+                        # Publish throttle and steering values
+                        throttle_pub.publish(Float32(throttle_val))
+                        steering_pub.publish(Float32(steering_val))
 
-                try:
-                    throttle_val = float(row['u'])
-                    steering_val = float(row['delta'])
-                except ValueError:
-                    rospy.logwarn("Invalid row skipped: %s", row)
-                    continue
+                        # finally, write all data to the CSV log file
+                        current_time = rospy.get_time() - start_time
+                        pose = data_collector.latest_pose
+                        twist = data_collector.latest_twist
+                        velocity = math.hypot(twist[0], twist[1])
+                        yaw = pose[2]
+                        yaw_rate = twist[2]
+                        writer.writerow([current_time, steering_val, throttle_val, pose[0], pose[1], twist[0], twist[1], velocity, yaw, yaw_rate])
+                        rate.sleep()
 
-                throttle_pub.publish(Float32(throttle_val))
-                steering_pub.publish(Float32(steering_val))
-                rate.sleep()
+                    rospy.loginfo("Finished publishing all rows.")
 
-            rospy.loginfo("Finished publishing all rows.")
-
+            except IOError:
+                rospy.logerr("Could not read file: %s", csv_path)
     except IOError:
-        rospy.logerr("Could not read file: %s", csv_path)
+        rospy.logerr("Could not open CSV log file for writing: %s", CSV_LOGFILE)
+        return
+
+
+
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
