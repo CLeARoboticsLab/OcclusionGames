@@ -23,8 +23,8 @@ import time
 HOST = '0.0.0.0'  # localhost
 PORT = 65432        # non-privileged port
 
-POSE_TOPIC = "vrpn_client_node/JaiAliJetRacerTwo/pose"
-TWIST_TOPIC = "vrpn_client_node/JaiAliJetRacerTwo/twist"
+POSE_TOPIC = "vrpn_client_node/JaiAliJetRacer/pose"
+TWIST_TOPIC = "vrpn_client_node/JaiAliJetRacer/twist"
 THROTTLE_TOPIC = "/jetracer/throttle"
 STEERING_TOPIC = "/jetracer/steering"
 
