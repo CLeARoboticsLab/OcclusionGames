@@ -18,8 +18,10 @@ def publish_from_csv(csv_path, rate_hz=100):
     throttle_pub = rospy.Publisher('/jetracer/throttle', Float32, queue_size=10)
     steering_pub = rospy.Publisher('/jetracer/steering', Float32, queue_size=10)
 
-    # Start data collector
+    # Start data collector and wait for it to receive good pose data
     data_collector = DataCollector()
+    while data_collector.latest_pose[0] == 0:
+        pass # should not be perfectly 0
 
     # Prepare CSV logfile for data collection
     try:
