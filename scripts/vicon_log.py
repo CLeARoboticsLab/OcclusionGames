@@ -10,8 +10,9 @@ import math
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
 #ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
-THROTTLE_VALUE = 0.5
-STEERING_VALUE = 0.04
+THROTTLE_VALUE = 0.3
+STEERING_VALUE = 0.0
+HEADING_BIAS = -0.05
 X_STOP = 3.0
 T_STOP = 10
 
@@ -29,7 +30,7 @@ class ViconLogger:
         self.throttle_pub = rospy.Publisher("/jetracer/throttle", Float32, queue_size=1)
         self.steering_pub = rospy.Publisher("/jetracer/steering", Float32, queue_size=1)
         self.throttle_pub.publish(Float32(THROTTLE_VALUE))
-        self.steering_pub.publish(Float32(STEERING_VALUE))
+        self.steering_pub.publish(Float32(STEERING_VALUE + HEADING_BIAS))
         self.vel_sub = rospy.Subscriber(VEL_TOPIC, TwistStamped, self.vicon_callback) # I'll start by looking directly at the velocity provided by the vicon
         # If it's garbage, we'll have to resort to some sort of finite difference scheme with the position
         self.pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.pose_callback)
@@ -54,10 +55,10 @@ class ViconLogger:
 
 
         print("I'm writing something")
-        self.writer.writerow([now, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity])
+        self.writer.writerow([now - self.start_time, p.x, p.y, p.z, yaw, angular.z, linear.x, linear.y, linear.z, velocity])
         self.logfile.flush()
         self.throttle_pub.publish(Float32(THROTTLE_VALUE))
-        self.steering_pub.publish(Float32(STEERING_VALUE))
+        self.steering_pub.publish(Float32(STEERING_VALUE + HEADING_BIAS))
 
 
     def pose_callback(self, msg):
@@ -66,7 +67,7 @@ class ViconLogger:
         if self.position.position.x >= X_STOP or t - self.start_time > T_STOP:
             self.vel_sub.unregister()
             self.pose_sub.unregister()
-            self.throttle_pub.publish(0)
+            self.throttle_pub.publish(-0.3)
             self.steering_pub.publish(0)
             print("ALL DONE!")
 
