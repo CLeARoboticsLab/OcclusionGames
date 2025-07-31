@@ -156,17 +156,35 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # --------------------------------------------------------------------------- #
     # 4.  Send/execute controls over TCP
     # --------------------------------------------------------------------------- #
-    for state, control in zip(states_np, controls_np): # iterate over all controls
+    
+    # Low-pass filter parameters
+    alpha = 0.3  # filter coefficient (0 < alpha < 1, smaller = more filtering)
+    filtered_throttle = 0.0  # initialize filtered values
+    filtered_steering = 0.0
+    
+    for i, (state, control) in enumerate(zip(states_np, controls_np)): # iterate over all controls
         curr_throttle = float(control[0])
         curr_steering = float(control[1])
+        
+        # Apply low-pass filter (exponential moving average)
+        if i == 0:
+            # First iteration: initialize with current values
+            filtered_throttle = curr_throttle
+            filtered_steering = curr_steering
+        else:
+            # Apply filter: filtered = alpha * current + (1-alpha) * previous_filtered
+            filtered_throttle = alpha * curr_throttle + (1 - alpha) * filtered_throttle
+            filtered_steering = alpha * curr_steering + (1 - alpha) * filtered_steering
+        
         # clip controls if not already
-        curr_throttle = min(THROTTLE_MAX, max(-1, curr_throttle))
-        curr_steering = min(1, max(-1, curr_steering))
+        filtered_throttle = min(THROTTLE_MAX, max(-1, filtered_throttle))
+        filtered_steering = min(1, max(-1, filtered_steering))
+        
         # send data over the network
-        control_dict = {"throttle": curr_throttle, "steering": curr_steering}
+        control_dict = {"throttle": filtered_throttle, "steering": filtered_steering}
         print("State:", state)
         print("Unclipped control:", control)
-        print("Clipped control:", control_dict)
+        print("Filtered control:", control_dict)
         print()
         json_str = json.dumps(control_dict)
         client_socket.sendall(json_str.encode("utf-8"))
@@ -174,7 +192,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         time.sleep(dt)
 
 # --------------------------------------------------------------------------- #
-# 4.  Plots
+# 5.  Plots
 # --------------------------------------------------------------------------- #
 t = jnp.arange(T + 1) * dt
 
