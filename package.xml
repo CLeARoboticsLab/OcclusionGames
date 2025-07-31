@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>jai_ali_pid_test</name>
+  <name>occlusion_games</name>
   <version>0.0.0</version>
-  <description>The jai_ali_pid_test package</description>
+  <description>The occlusion_games package</description>
 
   <!-- One maintainer tag required, multiple allowed, one person per tag -->
   <!-- Example:  -->
@@ -19,7 +19,7 @@
   <!-- Url tags are optional, but multiple are allowed, one per tag -->
   <!-- Optional attribute type can be: website, bugtracker, or repository -->
   <!-- Example: -->
-  <!-- <url type="website">http://wiki.ros.org/jai_ali_pid_test</url> -->
+  <!-- <url type="website">http://wiki.ros.org/occlusion_games</url> -->
 
 
   <!-- Author tags are optional, multiple are allowed, one per tag -->
