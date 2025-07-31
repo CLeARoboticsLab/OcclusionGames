@@ -15,6 +15,20 @@ import matplotlib.pyplot as plt
 import time
 
 # --------------------------------------------------------------------------- #
+# ROS Setup for visualization
+# --------------------------------------------------------------------------- #
+import rospy
+from geometry_msgs.msg import PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
+from nav_msgs.msg import Path
+from std_msgs.msg import Header, ColorRGBA
+
+rospy.init_node('trajectory_publisher', anonymous=True)
+path_pub = rospy.Publisher('/planned_trajectory', Path, queue_size=1)
+marker_pub = rospy.Publisher('/trajectory_markers', MarkerArray, queue_size=1)
+
+
+# --------------------------------------------------------------------------- #
 # 0.  Import your solver (change path if needed)
 # --------------------------------------------------------------------------- #
 import sys, os
@@ -191,8 +205,86 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         # now, wait for dt number of ms to send the next command
         time.sleep(dt)
 
+
 # --------------------------------------------------------------------------- #
-# 5.  Plots
+# 5.  Publish trajectory to RViz
+# --------------------------------------------------------------------------- #
+
+def publish_trajectory_to_rviz(states_np, frame_id="map"):
+    """
+    Publish the planned trajectory to RViz as both a Path and MarkerArray
+    """
+    # Create Path message
+    path_msg = Path()
+    path_msg.header = Header()
+    path_msg.header.stamp = rospy.Time.now()
+    path_msg.header.frame_id = frame_id
+    
+    # Create MarkerArray for better visualization
+    marker_array = MarkerArray()
+    
+    # Line strip marker for the trajectory
+    line_marker = Marker()
+    line_marker.header = path_msg.header
+    line_marker.ns = "trajectory_line"
+    line_marker.id = 0
+    line_marker.type = Marker.LINE_STRIP
+    line_marker.action = Marker.ADD
+    line_marker.scale.x = 0.05  # line width
+    line_marker.color = ColorRGBA(1.0, 0.0, 0.0, 1.0)  # red
+    
+    # Arrow markers for heading
+    for i, state in enumerate(states_np):
+        x, y, v, theta = state
+        
+        # Add to path
+        pose = PoseStamped()
+        pose.header = path_msg.header
+        pose.pose.position.x = float(x)
+        pose.pose.position.y = float(y)
+        pose.pose.position.z = 0.0
+        
+        # Convert heading to quaternion
+        pose.pose.orientation.x = 0.0
+        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.z = jnp.sin(theta / 2.0)
+        pose.pose.orientation.w = jnp.cos(theta / 2.0)
+        
+        path_msg.poses.append(pose)
+        
+        # Add point to line marker
+        point = Point()
+        point.x = float(x)
+        point.y = float(y)
+        point.z = 0.0
+        line_marker.points.append(point)
+        
+        # Add arrow markers every few points for heading visualization
+        if i % 3 == 0:  # every 3rd point
+            arrow_marker = Marker()
+            arrow_marker.header = path_msg.header
+            arrow_marker.ns = "trajectory_arrows"
+            arrow_marker.id = i
+            arrow_marker.type = Marker.ARROW
+            arrow_marker.action = Marker.ADD
+            arrow_marker.pose = pose.pose
+            arrow_marker.scale.x = 0.2  # length
+            arrow_marker.scale.y = 0.05  # width
+            arrow_marker.scale.z = 0.05  # height
+            arrow_marker.color = ColorRGBA(0.0, 1.0, 0.0, 0.8)  # green
+            marker_array.markers.append(arrow_marker)
+    
+    marker_array.markers.append(line_marker)
+    
+    # Publish messages
+    path_pub.publish(path_msg)
+    marker_pub.publish(marker_array)
+    print("Published trajectory to RViz")
+
+publish_trajectory_to_rviz(states_np, frame_id="map")
+
+# --------------------------------------------------------------------------- #
+# 6.  Plots
 # --------------------------------------------------------------------------- #
 t = jnp.arange(T + 1) * dt
 
