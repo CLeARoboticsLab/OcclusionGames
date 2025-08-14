@@ -19,6 +19,8 @@ from std_msgs.msg import Float32
 from geometry_msgs.msg import PoseStamped, TwistStamped
 import math
 import time
+import signal
+import sys
 
 HOST = '0.0.0.0'  # localhost
 PORT = 65432        # non-privileged port
@@ -38,6 +40,8 @@ LATEST_X = 0
 LATEST_Y = 1
 LATEST_V = 2
 LATEST_PSI = 3
+
+server_socket = None  # Global reference for cleanup
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -113,20 +117,40 @@ def handle_receive(conn):
             steering_pub.publish(Float32(float(json_obj['steering'])))
     print("Exiting receive handler...")
 
+def sigint_handler(signum, frame):
+    print("\nSIGINT received, shutting down server...")
+    if server_socket:
+        try:
+            server_socket.close()
+            print("Server socket closed.")
+        except Exception as e:
+            print(f"Error closing server socket: {e}")
+    rospy.signal_shutdown("SIGINT received")
+    sys.exit(0)
+
 def main():
-    global throttle_pub, steering_pub, pose_sub
+    global throttle_pub, steering_pub, pose_sub, server_socket
     rospy.init_node("tcp_jetracer_server")
     throttle_pub = rospy.Publisher(THROTTLE_TOPIC, Float32, queue_size=1)
     steering_pub = rospy.Publisher(STEERING_TOPIC, Float32, queue_size=1)
     pose_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, pose_callback)
     #twist_sub = rospy.Subscriber(TWIST_TOPIC, TwistStamped, twist_callback)
+
+    # Register SIGINT handler
+    signal.signal(signal.SIGINT, sigint_handler)
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        server_socket = s  # Assign to global for cleanup
         s.bind((HOST, PORT))
         s.listen()
         print(f"Server listening on {HOST}:{PORT}...")
         while not rospy.is_shutdown():
             print("Waiting for a new connection...")
-            conn, addr = s.accept()
+            try:
+                conn, addr = s.accept()
+            except OSError:
+                # Socket closed, exit loop
+                break
             print(f"Connected by {addr}")
             threading.Thread(target=handle_receive, args=(conn,), daemon=True).start()
     rospy.spin()
