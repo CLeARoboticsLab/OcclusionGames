@@ -47,8 +47,8 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.25  # [s]  integration step
-T = 100  # horizon length
+dt = 0.1  # [s]  integration step
+T = 50  # horizon length
 n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
@@ -57,7 +57,7 @@ B_U_1 = 8.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.46
 THROTTLE_MAX = 0.25 # max throttle without slipping
-HEADING_BIAS_1 = -0.2  # steering bias
+HEADING_BIAS_1 = -0.1  # steering bias
 U_L = 1.25
 U_A = 0.25
 U_B = 15
@@ -75,8 +75,9 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     u_raw, delta_raw = control
     k = 100
     # clip controls
+    u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
     u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
-    u_raw = jnp.log(1 + jnp.exp(k * u_raw)) / k  # squashes throttle via log
+    #u_raw = jnp.log(1 + jnp.exp(k * (u_raw - 0.075))) / k  # squashes throttle via log
     delta_raw += HEADING_BIAS_1
     delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
@@ -96,7 +97,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
 
 
 # -- single-step quadratic-ish cost -------------------------------------------------
-w_pos, w_th, w_u = 1.0, 1.0, 10.0
+w_pos, w_th, w_u = 100.0, 100.0, 0.5  # weights for position, heading, control effort
 
 
 # def stage_cost(x, u):
@@ -145,10 +146,12 @@ def build_circle_cost(
     v_ref=0.5,
     theta0=0.0,
     dt=0.02,
-    w_pos=1.0,
-    w_th=0.1,
-    w_v=0.0,      # weight for velocity error (optional)
-    w_u=1e-2,
+    w_pos=10.0,
+    w_th=2.0,
+    w_v=2.0,
+    w_u=0.1,
+    w_omega=10.0,
+    reverse_penalty=10000.0,
     term_weight=100.0
 ):
     """
@@ -157,66 +160,70 @@ def build_circle_cost(
     State: x = [x, y, v, yaw]
     Control: u = [v_cmd, omega]
     """
-
     center = jnp.array(center)
     omega_ref = v_ref / radius
-    t_counter = {"t": 0}
 
     def wrap_angle(a):
         return (a + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
 
     def ref_at_t(t):
         ang = theta0 + omega_ref * (t * dt)
+        N = 10  # number of steps to ramp up
+        v_ref_t = v_ref * jnp.clip(t / N, 0, 1)
+        omega_ref_t = v_ref_t / radius
         x_ref = jnp.array([
-            center[0] + radius * jnp.cos(ang),   # x
-            center[1] + radius * jnp.sin(ang),   # y
-            v_ref,                               # v
-            ang + jnp.pi / 2.0                   # yaw
+            center[0] + radius * jnp.cos(ang),
+            center[1] + radius * jnp.sin(ang),
+            v_ref_t,
+            ang + jnp.pi / 2.0
         ])
-        u_ref = jnp.array([v_ref, omega_ref])
+        u_ref = jnp.array([v_ref_t, omega_ref_t])
         return x_ref, u_ref
 
-    def stage_cost(x, u):
-        t = t_counter["t"]
+    def stage_cost(x, u, t):
         x_ref, u_ref = ref_at_t(t)
 
-        # position error
-        pos_err = x[0] - x_ref[0], x[1] - x_ref[1]
-        pos_cost = w_pos * (pos_err[0]**2 + pos_err[1]**2)
-
-        # heading error
+        # Position error
+        pos_cost = w_pos * ((x[0] - x_ref[0])**2 + (x[1] - x_ref[1])**2)
+        # Heading error
         yaw_err = wrap_angle(x[3] - x_ref[3])
         head_cost = w_th * (yaw_err**2)
+        # Velocity error
+        vel_cost = w_v * ((x[2] - x_ref[2])**2)
+        # Control effort
+        ctrl_cost = w_u * jnp.sum((u - u_ref)**2)
+        # Penalize negative velocity command
+        rev_penalty = reverse_penalty * jnp.maximum(-u[0], 0.0)
+        # Penalize deviation from reference omega (optional)
+        omega_cost = w_omega * ((u[1] - omega_ref)**2)
 
-        # velocity error (optional, if w_v > 0)
-        vel_err = x[2] - x_ref[2]
-        vel_cost = w_v * (vel_err**2)
+        return pos_cost + head_cost + vel_cost + ctrl_cost + rev_penalty + omega_cost
 
-        # control cost
-        ctrl_cost = w_u * jnp.sum((u - u_ref) ** 2)
-
-        t_counter["t"] += 1
-        return pos_cost + head_cost + vel_cost + ctrl_cost
-
-    def terminal_cost(x_T):
-        t_T = t_counter["t"]
+    def terminal_cost(x_T, t_T):
         x_ref, _ = ref_at_t(t_T)
-        pos_err = x_T[0] - x_ref[0], x_T[1] - x_ref[1]
+        pos_cost = w_pos * ((x_T[0] - x_ref[0])**2 + (x_T[1] - x_ref[1])**2)
         yaw_err = wrap_angle(x_T[3] - x_ref[3])
-        vel_err = x_T[2] - x_ref[2]
-        return term_weight * (
-            pos_err[0]**2 + pos_err[1]**2 + 0.1 * yaw_err**2 + w_v * vel_err**2
-        )
+        head_cost = w_th * (yaw_err**2)
+        vel_cost = w_v * ((x_T[2] - x_ref[2])**2)
+        return term_weight * (pos_cost + 0.1 * head_cost + vel_cost)
 
     def traj_cost(xs, us):
-        t_counter["t"] = 0
-        step_costs = jax.vmap(stage_cost)(xs[:-1], us)
-        return jnp.sum(step_costs) + terminal_cost(xs[-1])
+        T = us.shape[0]
+        t_arr = jnp.arange(T)
+        step_costs = jax.vmap(stage_cost)(xs[:-1], us, t_arr)
+        return jnp.sum(step_costs) + terminal_cost(xs[-1], T)
 
-    return {"stage": stage_cost, "terminal": terminal_cost, "traj": traj_cost}
+    # return {"stage": lambda x, u: stage_cost(x, u, 0),  # iLQR expects (x, u)
+    #         "terminal": lambda x_T: terminal_cost(x_T, 0),
+    #         "traj": traj_cost}
+    return {
+        "stage": stage_cost,        # expects (x, u, t)
+        "terminal": lambda x_T: terminal_cost(x_T, T),  # expects (x_T)
+        "traj": traj_cost
+    }
 
 
-cost = build_circle_cost(w_pos=w_pos, w_th=w_th, w_u=w_u, term_weight=300.0)
+cost = build_circle_cost(w_u=w_u, w_th=w_th, w_pos=w_pos, term_weight=200.0, dt=dt)
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # --------------------------------------------------------------------------- #
@@ -227,7 +234,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     client_socket.sendall(RECV_CODE.encode("utf-8"))
     data = client_socket.recv(1024).decode("utf-8")
     pose_data = json.loads(data)
-    x0 = jnp.array([pose_data["x"], pose_data["y"], 0, pose_data["psi"]])  # initial state
+    x0 = jnp.array([pose_data["x"], pose_data["y"], 0.5, pose_data["psi"]])  # initial state
     u_init = jnp.zeros((T, m))  # zero-controls guess
     print(f"Initial state: {x0}")
 
@@ -285,7 +292,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         print("Filtered control:", control_dict)
         print()
         json_str = json.dumps(control_dict)
-        client_socket.sendall(json_str.encode("utf-8"))
+        #client_socket.sendall(json_str.encode("utf-8"))
         # now, wait for dt number of ms to send the next command
         time.sleep(dt)
 
@@ -382,10 +389,20 @@ axs[0].set_ylabel("y [m]")
 axs[0].axis("equal")
 axs[0].grid(alpha=0.3)
 
+# Plot reference circle
+center = (0,0)
+radius = 1
+theta_ref = jnp.linspace(0, 2 * jnp.pi, 100)
+x_circle = center[0] + radius * jnp.cos(theta_ref)
+y_circle = center[1] + radius * jnp.sin(theta_ref)
+axs[0].plot(x_circle, y_circle, 'k--', label='Reference circle')
+axs[0].legend()
+
 # (b) heading + positions vs time
 axs[1].plot(t, states_np[:, 0], label="x")
 axs[1].plot(t, states_np[:, 1], label="y")
-axs[1].plot(t, states_np[:, 2], label="θ", linestyle="--")
+axs[1].plot(t, states_np[:, 2], label="v", linestyle="--")
+axs[1].plot(t, states_np[:, 3], label="θ", linestyle="--")
 axs[1].set_title("State trajectories"), axs[1].grid(alpha=0.3)
 axs[1].legend(ncol=3)
 

@@ -78,6 +78,7 @@ class iLQR:
         reg_param_scaling=10.0,
         reg_param_max=1e-1,
     ):
+        # Accepts cost dict with time-varying stage cost: stage_cost(x, u, t)
         self.cost = cost["stage"]
         self.terminal_cost = cost["terminal"]
         self.total_cost = cost["traj"]
@@ -106,26 +107,27 @@ class iLQR:
         self.q_terminal = jit(grad(self.terminal_cost, argnums=0))
         self.Q_terminal = jit(jacfwd(self.q_terminal, argnums=0))
 
-        q_fn = jax.grad(self.cost, argnums=0)
-        r_fn = jax.grad(self.cost, argnums=1)
+        # For time-varying cost, pass t to cost
+        q_fn = lambda x, u, t: jax.grad(self.cost, argnums=0)(x, u, t)
+        r_fn = lambda x, u, t: jax.grad(self.cost, argnums=1)(x, u, t)
 
-        def _all_derivs(x, u):
+        def _all_derivs(x, u, t):
             A = jax.jacfwd(self.dynamics, argnums=0)(x, u)
             B = jax.jacfwd(self.dynamics, argnums=1)(x, u)
-            q = q_fn(x, u)
-            r = r_fn(x, u)
-            Q = jax.jacfwd(q_fn, argnums=0)(x, u)
-            R = jax.jacfwd(r_fn, argnums=1)(x, u)
-            H = jax.jacfwd(q_fn, argnums=1)(x, u)
+            q = q_fn(x, u, t)
+            r = r_fn(x, u, t)
+            Q = jax.jacfwd(q_fn, argnums=0)(x, u, t)
+            R = jax.jacfwd(r_fn, argnums=1)(x, u, t)
+            H = jax.jacfwd(q_fn, argnums=1)(x, u, t)
             return A, B, Q, R, H, q, r
 
-        self.all_derivs = jit(jax.vmap(_all_derivs, in_axes=(0, 0)))
+        self.all_derivs = jit(jax.vmap(_all_derivs, in_axes=(0, 0, 0)))
 
         # Rollout functions
         def rollout(init_state, controls_nom):
-            def step(init_state, idx):
+            def step(state_t, idx):
                 control_t = controls_nom[idx]
-                next_state = self.dynamics(init_state, control_t)
+                next_state = self.dynamics(state_t, control_t)
                 return next_state, (next_state, control_t)
 
             _, (states_minus_init, controls) = scan(
@@ -135,8 +137,8 @@ class iLQR:
             return (
                 jnp.vstack([init_state, states_minus_init]),
                 controls,
-            )  # TODO: check if vstack is efficient
-
+            )
+        
         def rollout_with_policy(states_nom, controls_nom, Ks, ds):
             def step_with_policy(state_t, idx):
                 K_t = Ks[idx]
@@ -289,7 +291,9 @@ class iLQR:
     def ilqr_step(self, carry):
         reg_param, it, states_nom, controls_nom, _, _, stats = carry
         # Backward pass
-        approximations = self.all_derivs(states_nom[:-1], controls_nom)
+        T = controls_nom.shape[0]
+        t_arr = jnp.arange(T)
+        approximations = self.all_derivs(states_nom[:-1], controls_nom, t_arr)
         (_, _, _, pred_cost_decrease, R_BSB_tm1), (Ks, ds) = scan(
             self.scan_step,
             (
