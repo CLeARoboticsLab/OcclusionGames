@@ -67,6 +67,27 @@ U_L = 1.25
 U_A = 0.25
 U_B = 15
 
+# -- Runge-Kutta 4 Solver ------------------------------------------
+def runge_kutta_4(f, y0, t0, tf, h):
+    """Function implementing the iterative process used in Runge-Kutta's method
+    at the fourth order
+    """
+    # Create an array for time steps
+    t_values = np.arange(t0, tf + h, h)
+    y_values = np.zeros(len(t_values))
+    # Set the initial condition
+    y_values[0] = y0
+    # Perform the RK4 iteration
+    for i in range(1, len(t_values)):
+        t = t_values[i - 1]
+        y = y_values[i - 1]
+        k1 = h * f(t, y)
+        k2 = h * f(t + h / 2, y + k1 / 2)
+        k3 = h * f(t + h / 2, y + k2 / 2)
+        k4 = h * f(t + h, y + k3)
+        # Update y based on the RK4 formula
+        y_values[i] = y + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+    return t_values, y_values
 
 @jax.jit
 def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
