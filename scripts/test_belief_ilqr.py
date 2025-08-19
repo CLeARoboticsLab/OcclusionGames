@@ -10,6 +10,7 @@ pip install "jax[cpu]" matplotlib
 from functools import partial
 import jax
 import jax.numpy as jnp
+import numpy as np
 import math
 import matplotlib.pyplot as plt
 import time
@@ -42,6 +43,7 @@ import json
 
 DEBUGGING_MODE = True
 TIME_REQ = True
+USING_RK4 = True
 
 HOST = "192.168.50.236"
 PORT = 65432
@@ -51,30 +53,39 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.02  # [s]  integration step
+dt = 0.075  # [s]  integration step
 T = 100  # horizon length
-V_REF = 3.1 # [m/s]  reference velocity for the circle cost
+V_REF = 0.5 # [m/s]  reference velocity for the circle cost
+CIRCLE_RADIUS = 1.0 # [m]  radius of the circle to track
 n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
-B_U_1 = 10.0  # m/s² (≈0.2 g per unit throttle)
+B_U_1 = 8.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.4
 THROTTLE_MAX = 0.25 # max throttle without slipping
-HEADING_BIAS_1 = -0.2  # steering bias
+HEADING_BIAS_1 = -0.0  # steering bias
 U_L = 1.25
 U_A = 0.25
 U_B = 15
 
 # -- Runge-Kutta 4 Solver ------------------------------------------
-def runge_kutta_4(f, y0, t0, tf, h):
-    """Function implementing the iterative process used in Runge-Kutta's method
-    at the fourth order
+def runge_kutta_4(f, y0: np.ndarray, t0, tf, h):
+    """
+    4th-order Runge-Kutta method for numerical integration.
+    Parameters:
+        f: first-order derivative of y, written as f(t, y)
+        y0: initial value of the function to approximate
+        t0: initial time
+        tf: final time
+        h: step size
+    Returns:
+        (t_values, y_values): array of timesteps and their respective approximated function values
     """
     # Create an array for time steps
     t_values = np.arange(t0, tf + h, h)
-    y_values = np.zeros(len(t_values))
+    y_values = np.zeros((len(t_values), len(y0)))
     # Set the initial condition
     y_values[0] = y0
     # Perform the RK4 iteration
@@ -97,7 +108,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     control = [u, δ]      <-- throttle and steering commands
     """
     # unpack state, control
-    x, y, vx, th = state
+    x, y, v, th = state
     u_raw, delta_raw = control
     k = 100
     # clip controls
@@ -109,15 +120,15 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
     # compute state changes
-    x_dot = vx * jnp.cos(th)
-    y_dot = vx * jnp.sin(th)
-    vx_dot = B_U_1 * u_raw
-    th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
+    x_dot = v * jnp.cos(th)
+    y_dot = v * jnp.sin(th)
+    v_dot = B_U_1 * u_raw
+    th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
 
     # update state
     x_next = x + x_dot * dt
     y_next = y + y_dot * dt
-    v_next = vx + vx_dot * dt
+    v_next = v + v_dot * dt
     th_next = th + th_dot * dt
 
     return jnp.array([x_next, y_next, v_next, th_next])
@@ -223,7 +234,7 @@ def build_circle_cost(
         vel_cost = w_v * ((x[2] - x_ref[2])**2)
         
         # Control effort (relative to reference)
-        ctrl_cost = w_u * jnp.sum((u - u_ref)**2)
+        ctrl_cost = w_u * jnp.sum(u**2)
         
         # Reverse penalty
         rev_penalty = reverse_penalty * jnp.maximum(-u[0], 0.0)
@@ -232,10 +243,6 @@ def build_circle_cost(
         omega_cost = w_omega * ((u[1] - u_ref[1])**2)
 
         return pos_cost + head_cost + vel_cost + ctrl_cost + rev_penalty + omega_cost
-    
-    def stage_cost_2(x, u, t):
-        # this cost function just wants the agent to stay on the circle and stay moving irrelevant of position
-        pass
 
     @jax.jit
     def terminal_cost(x_T, t_T):
@@ -259,6 +266,96 @@ def build_circle_cost(
         "traj": traj_cost
     }
 
+def build_wavepoint_cost(
+    center=(0.0, 0.0),
+    radius=1.0,
+    v_ref=0.5,
+    theta0=0.0,
+    dt=0.02,
+    w_pos=500.0,     # Increase position weight
+    w_th=10.0,      # Increase heading weight
+    w_v=5.0,        # Adjust velocity weight
+    w_u=1.0,        # Increase control penalty
+    w_omega=2.0,    # Reduce angular velocity weight
+    reverse_penalty=0.0,
+    term_weight=100.0
+):
+    """
+    Returns {'stage', 'terminal', 'traj'} cost functions for iLQR
+    tracking a circular trajectory.
+    State: x = [x, y, v, yaw]
+    Control: u = [v_cmd, omega]
+    """
+    center = jnp.array(center)
+    omega_ref = v_ref / radius
+
+    def wrap_angle(a):
+        return (a + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+        
+
+    def ref_at_t(t):
+        ang = theta0 + omega_ref * (t * dt)
+        N = 10  # number of steps to ramp up
+        v_ref_t = v_ref # * jnp.clip(t / N, 0, 1)
+        omega_ref_t = v_ref_t / radius
+        x_ref = jnp.array([
+            center[0] + radius * jnp.cos(ang),
+            center[1] + radius * jnp.sin(ang),
+            v_ref_t,
+            ang + jnp.pi / 2.0
+        ])
+        u_ref = jnp.array([v_ref_t, omega_ref_t])
+        return x_ref, u_ref
+
+    @jax.jit
+    def stage_cost(x, u, t):
+        x_ref, u_ref = ref_at_t(t)
+        
+        # Position tracking
+        pos_err = jnp.array([x[0] - x_ref[0], x[1] - x_ref[1]])
+        pos_cost = w_pos * jnp.sum(pos_err**2)
+        
+        # Heading tracking (with proper angle wrapping)
+        yaw_err = wrap_angle(x[3] - x_ref[3])
+        head_cost = w_th * yaw_err**2
+        
+        # Velocity tracking
+        vel_cost = w_v * ((x[2] - x_ref[2])**2)
+        
+        # Control effort (relative to reference)
+        ctrl_cost = w_u * jnp.sum((u - u_ref)**2)
+        
+        # Reverse penalty
+        rev_penalty = reverse_penalty * jnp.maximum(-u[0], 0.0)
+        
+        # Angular velocity tracking
+        omega_cost = w_omega * ((u[1] - u_ref[1])**2)
+
+        return pos_cost + head_cost + vel_cost + ctrl_cost + rev_penalty + omega_cost
+
+    @jax.jit
+    def terminal_cost(x_T, t_T):
+        x_ref, _ = ref_at_t(t_T)
+        pos_cost = w_pos * ((x_T[0] - x_ref[0])**2 + (x_T[1] - x_ref[1])**2)
+        yaw_err = wrap_angle(x_T[3] - x_ref[3])
+        head_cost = w_th * (yaw_err**2)
+        vel_cost = w_v * ((x_T[2] - x_ref[2])**2)
+        return term_weight * (pos_cost + 0.1 * head_cost + vel_cost)
+
+    @jax.jit
+    def traj_cost(xs, us):
+        T = us.shape[0]
+        t_arr = jnp.arange(T)
+        step_costs = jax.vmap(stage_cost)(xs[:-1], us, t_arr)
+        return jnp.sum(step_costs) + terminal_cost(xs[-1], T)
+
+    return {
+        "stage": lambda x, u, t: stage_cost(x, u, t),
+        "terminal": lambda x_T: terminal_cost(x_T, T),
+        "traj": traj_cost
+    }
+
+
 reg_cost = build_unicycle_cost(
     w_pos=500.0,     # Stronger position tracking
     w_th=10.0,      # Moderate heading tracking
@@ -267,15 +364,15 @@ reg_cost = build_unicycle_cost(
 )
 
 circle_cost = build_circle_cost(
-    radius=1.0,
+    radius=CIRCLE_RADIUS,
     v_ref=V_REF,      # Slower reference velocity
     dt=dt,
-    w_pos=500.0,     # Stronger position tracking
-    w_th=500.0,      # Moderate heading tracking
-    w_v=5.0,        # Moderate velocity tracking
-    w_u=0.001,        # Moderate control penalty
-    w_omega=2.0,     # Lower angular velocity weight
-    term_weight=50.0
+    w_pos=50.0,     # Stronger position tracking
+    w_th=5.0,      # Moderate heading tracking
+    w_v=10.0,        # Moderate velocity tracking
+    w_u=10.0,        # Moderate control penalty
+    w_omega=0.0,     # Lower angular velocity weight
+    term_weight=100.0
 )
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -285,7 +382,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # get pose information from the server
     x0 = None
     if DEBUGGING_MODE:
-        x0 = jnp.array([1, 0, V_REF, jnp.pi / 2])  # fixed initial state
+        x0 = jnp.array([CIRCLE_RADIUS, 0, 0.0, jnp.pi / 2])  # fixed initial state
     else:
         client_socket.connect((HOST, PORT)) 
         client_socket.sendall(RECV_CODE.encode("utf-8"))
@@ -441,8 +538,47 @@ t = jnp.arange(T + 1) * dt
 
 fig, axs = plt.subplots(3, 1, figsize=(8, 8))
 
+# Get better state array using RK4
+def get_states_from_RK4(states, controls, dt):
+    # Define derivative function
+    def f(t, state: jnp.ndarray) -> np.ndarray:
+        """
+        Computes the state derivative for the bicycle model.
+        Follows the jitted dynamics function written above.
+        Args:
+            t: time step (used to index controls)
+            state: state vector [x, y, v, θ]
+        Returns:
+            state_dot: state derivative vector [x_dot, y_dot, v_dot, θ_dot]
+        """
+        t = int(t)
+        u_raw, delta_raw = controls[t]
+        x, y, v, th = state
+        k = 100
+        # clip controls
+        u_raw = jnp.tanh(u_raw)
+        #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
+        #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
+        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
+        delta_raw += HEADING_BIAS_1
+        delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+
+        # compute state changes
+        x_dot = v * jnp.cos(th)
+        y_dot = v * jnp.sin(th)
+        v_dot = B_U_1 * u_raw
+        th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
+        state_dot = np.array([x_dot, y_dot, v_dot, th_dot])
+        return state_dot
+    
+    # Runge-Kutta 4 integration
+    t_values, y_values = runge_kutta_4(f, states[0], 0.0, dt * T, dt)
+    return y_values
+
+better_states = get_states_from_RK4(states_np, controls_np, dt) if USING_RK4 else states_np
+
 # (a) XY trajectory
-axs[0].plot(states_np[:, 0], states_np[:, 1], marker="o", ms=2)
+axs[0].plot(better_states[:, 0], better_states[:, 1], marker="o", ms=2)
 axs[0].set_title("Unicycle XY path")
 axs[0].set_xlabel("x [m]")
 axs[0].set_ylabel("y [m]")
@@ -451,7 +587,7 @@ axs[0].grid(alpha=0.3)
 
 # Plot reference circle
 center = (0,0)
-radius = 1
+radius = CIRCLE_RADIUS
 theta_ref = jnp.linspace(0, 2 * jnp.pi, 100)
 x_circle = center[0] + radius * jnp.cos(theta_ref)
 y_circle = center[1] + radius * jnp.sin(theta_ref)
@@ -459,10 +595,10 @@ axs[0].plot(x_circle, y_circle, 'k--', label='Reference circle')
 axs[0].legend()
 
 # (b) heading + positions vs time
-axs[1].plot(t, states_np[:, 0], label="x")
-axs[1].plot(t, states_np[:, 1], label="y")
-axs[1].plot(t, states_np[:, 2], label="v", linestyle="--")
-axs[1].plot(t, states_np[:, 3], label="θ", linestyle="--")
+axs[1].plot(t, better_states[:, 0], label="x")
+axs[1].plot(t, better_states[:, 1], label="y")
+axs[1].plot(t, better_states[:, 2], label="v", linestyle="--")
+axs[1].plot(t, better_states[:, 3], label="θ", linestyle="--")
 axs[1].set_title("State trajectories"), axs[1].grid(alpha=0.3)
 axs[1].legend(ncol=3)
 
