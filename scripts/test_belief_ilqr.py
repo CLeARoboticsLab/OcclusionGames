@@ -41,9 +41,10 @@ from solver_with_time import iLQR_t  # ← keep consistent with your repo
 import socket
 import json
 
-DEBUGGING_MODE = True
-TIME_REQ = True
-USING_RK4 = True
+DEBUGGING_MODE = True  # if True, use fixed initial state and simulate; otherwise, get from server and send controls over TCP
+TIME_REQ = True # if True, use iLQR_t; otherwise, use iLQR
+USING_RK4 = True # if True, use Runge-Kutta 4 to graph state trajectory
+USING_FULL_DYNAMICS = False # if True, use full dynamics; otherwise, use simplified bicycle model
 
 HOST = "192.168.50.236"
 PORT = 65432
@@ -53,20 +54,27 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.3  # [s]  integration step
-T = 32  # horizon length
-V_REF = 0.5 # [m/s]  reference velocity for the circle cost
-CIRCLE_RADIUS = 2.0 # [m]  radius of the circle to track
-n, m = 4, 2  # state & control sizes
+dt = 0.05  # [s]  integration step
+T = 60  # horizon length
+V_REF = 2.75 # [m/s]  reference velocity for the circle cost
+VX_INIT = 0.01 #[m/s]
+CIRCLE_RADIUS = 1.0 # [m]  radius of the circle to track
+n = 6 if USING_FULL_DYNAMICS else 4 # state size
+m = 2  # control size (throttle, steering)
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
 GRAVITY = 9.81  # m/s²
 ROLLING_FRICTION_COEFF = 0.0 # estimate for rolling friction
+COM_TO_FRONT = 0.082 # distance from center of mass to front axle (m)
+COM_TO_REAR = LENGTH - COM_TO_FRONT
+YAW_INERTIA = 0.015 # kg*m²
+C_ALPHA_F = 2.0 # cornering stiffness front (N/rad)
+C_ALPHA_R = 2.0 # cornering stiffness rear (N/rad)
 B_U_1 = 5.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.4
-THROTTLE_MAX = 0.25 # max throttle without slipping
+THROTTLE_MAX = 0.3 # max throttle without slipping
 HEADING_BIAS_1 = -0.0  # steering bias
 U_L = 1.25
 U_A = 0.25
@@ -132,35 +140,63 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
         Returns:
             state_dot: state derivative vector [x_dot, y_dot, v_dot, θ_dot]
         """
-        x, y, v, th = curr_state
+        x, y, th, vx, vy, om = None, None, None, None, None, None
+        if USING_FULL_DYNAMICS:
+            x, y, th, vx, vy, om = curr_state
+        else:
+            x, y, vx, th = curr_state
         u_raw, delta_raw = control
         k = 100
         # clip controls
         u_raw = jnp.tanh(u_raw)
         #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
         #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
-        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
+        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k - 0.007  # squashes throttle via log
         delta_raw += HEADING_BIAS_1
         delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
-        # compute state changes
-        x_dot = v * jnp.cos(th)
-        y_dot = v * jnp.sin(th)
-        #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
-        v_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * v * v / LENGTH  # account for rolling friction
-        th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
-        state_dot = jnp.array([x_dot, y_dot, v_dot, th_dot])
-        return state_dot
-    # unpack state, control
-    x, y, v, th = state
-    k1 = dt * d_state(state)
-    k2 = dt * d_state(state + k1 / 2)
-    k3 = dt * d_state(state + k2 / 2)
-    k4 = dt * d_state(state + k3)
-    # Update y based on the RK4 formula
-    next_state = state + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        state_dot = None
+        if USING_FULL_DYNAMICS:
+            ### NEW DYNAMICS ###
+            # position and orientation
+            c, s = jnp.cos(th), jnp.sin(th)
+            x_dot = vx * c - vy * s
+            y_dot = vx * s + vy * c
+            th_dot = om
 
-    #return jnp.array([x_next, y_next, v_next, th_next])
+            # velocity in body frame and yaw rate
+            slip_f = B_DELTA * delta_raw - (vy + COM_TO_FRONT * om) / vx
+            slip_r = - (vy + COM_TO_REAR * om) / vx
+            F_x = MASS * B_U_1 * u_raw
+            F_y_f = -C_ALPHA_F * slip_f
+            F_y_r = -C_ALPHA_R * slip_r
+            vx_dot = (F_x / MASS) - om * vy
+            vy_dot = (F_y_f + F_y_r) / MASS + om * vx
+            om_dot = (COM_TO_FRONT * F_y_f - COM_TO_REAR * F_y_r) / YAW_INERTIA
+            state_dot = jnp.array([x_dot, y_dot, th_dot, vx_dot, vy_dot, om_dot])
+        else:
+            ### OLD DYNAMICS ###
+            # compute state changes
+            x_dot = vx * jnp.cos(th)
+            y_dot = vx * jnp.sin(th)
+            #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
+            vx_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * vx * vx / LENGTH  # account for rolling friction
+            th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
+            state_dot = jnp.array([x_dot, y_dot, vx_dot, th_dot])
+        return state_dot
+    next_state = None
+    if USING_RK4:
+        # apply RK4
+        k1 = dt * d_state(state)
+        k2 = dt * d_state(state + k1 / 2)
+        k3 = dt * d_state(state + k2 / 2)
+        k4 = dt * d_state(state + k3)
+        # Update y based on the RK4 formula
+        next_state = state + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+    else:
+        # apply Euler integration
+        next_state = state + dt * d_state(state)
+
     return next_state
 
 
@@ -237,7 +273,7 @@ def build_circle_cost(
     def ref_at_t(t):
         ang = theta0 + omega_ref * (t * dt)
         N = 10  # number of steps to ramp up
-        v_ref_t = v_ref # * jnp.clip(t / N, 0, 1)
+        v_ref_t = v_ref * jnp.clip(t / N, 0, 1)
         omega_ref_t = v_ref_t / radius
         x_ref = jnp.array([
             center[0] + radius * jnp.cos(ang),
@@ -397,12 +433,12 @@ circle_cost = build_circle_cost(
     radius=CIRCLE_RADIUS,
     v_ref=V_REF,      # Slower reference velocity
     dt=dt,
-    w_pos=25.0,     # Stronger position tracking
-    w_th=1.0,      # Moderate heading tracking
-    w_v=2.0,        # Moderate velocity tracking
-    w_u=15.0,        # Moderate control penalty
-    w_omega=0.0,     # Lower angular velocity weight
-    term_weight=100.0
+    w_pos=50.0,     # Stronger position tracking
+    w_th=5.0,      # Moderate heading tracking
+    w_v=5.0,        # Moderate velocity tracking
+    w_u=20.0,        # Moderate control penalty
+    w_omega=1.0,     # Lower angular velocity weight
+    term_weight=10.0
 )
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -412,13 +448,19 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # get pose information from the server
     x0 = None
     if DEBUGGING_MODE:
-        x0 = jnp.array([CIRCLE_RADIUS, 0, 0.01, jnp.pi / 2])  # fixed initial state
+        if USING_FULL_DYNAMICS:
+            x0 = jnp.array([CIRCLE_RADIUS, 0, jnp.pi / 2, VX_INIT, 0.00, 0.0])  # fixed initial state
+        else:
+            x0 = jnp.array([CIRCLE_RADIUS, 0, VX_INIT, jnp.pi / 2])  # fixed initial state
     else:
         client_socket.connect((HOST, PORT)) 
         client_socket.sendall(RECV_CODE.encode("utf-8"))
         data = client_socket.recv(1024).decode("utf-8")
         pose_data = json.loads(data)
-        x0 = jnp.array([pose_data["x"], pose_data["y"], 0.5, pose_data["psi"]])  # initial state
+        if USING_FULL_DYNAMICS:
+            x0 = jnp.array([pose_data["x"], pose_data["y"], pose_data["psi"], VX_INIT, 0.0, 0.0])  # initial state
+        else:
+            x0 = jnp.array([pose_data["x"], pose_data["y"], VX_INIT, pose_data["psi"]])  # initial state
     u_init = jnp.zeros((T, m))  # zero-controls guess
     print(f"Initial state: {x0}")
 
@@ -597,7 +639,12 @@ def get_states_from_RK4(states, controls, dt):
         """
         t = int(t)
         u_raw, delta_raw = controls[t]
-        x, y, v, th = state
+        x, y, th, vx, vy, om = None, None, None, None, None, None
+        # Unpack state
+        if USING_FULL_DYNAMICS:
+            x, y, th, vx, vy, om = state
+        else:
+            x, y, vx, th = state
         k = 100
         # clip controls
         u_raw = jnp.tanh(u_raw)
@@ -607,14 +654,34 @@ def get_states_from_RK4(states, controls, dt):
         delta_raw += HEADING_BIAS_1
         delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
-        # compute state changes
-        x_dot = v * jnp.cos(th)
-        y_dot = v * jnp.sin(th)
-        C_rr = 1.0 * (0.0095 * (3.6 * v / 100) ** 2)
-        #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
-        v_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * v * v / LENGTH
-        th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
-        state_dot = np.array([x_dot, y_dot, v_dot, th_dot])
+        state_dot = None
+        if USING_FULL_DYNAMICS:
+            ### NEW DYNAMICS ###
+            # position and orientation
+            c, s = jnp.cos(th), jnp.sin(th)
+            x_dot = vx * c - vy * s
+            y_dot = vx * s + vy * c
+            th_dot = om
+
+            # velocity in body frame and yaw rate
+            slip_f = B_DELTA * delta_raw - (vy + COM_TO_FRONT * om) / vx
+            slip_r = - (vy + COM_TO_REAR * om) / vx
+            F_x = MASS * B_U_1 * u_raw
+            F_y_f = -C_ALPHA_F * slip_f
+            F_y_r = -C_ALPHA_R * slip_r
+            vx_dot = (F_x / MASS) - om * vy
+            vy_dot = (F_y_f + F_y_r) / MASS + om * vx
+            om_dot = (COM_TO_FRONT * F_y_f - COM_TO_REAR * F_y_r) / YAW_INERTIA
+            state_dot = jnp.array([x_dot, y_dot, th_dot, vx_dot, vy_dot, om_dot])
+        else:
+            ### OLD DYNAMICS ###
+            # compute state changes
+            x_dot = vx * jnp.cos(th)
+            y_dot = vx * jnp.sin(th)
+            #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
+            vx_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * vx * vx / LENGTH  # account for rolling friction
+            th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
+            state_dot = jnp.array([x_dot, y_dot, vx_dot, th_dot])
         return state_dot
     
     # Runge-Kutta 4 integration
