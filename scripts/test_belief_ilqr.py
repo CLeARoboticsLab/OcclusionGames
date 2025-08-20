@@ -53,15 +53,17 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.075  # [s]  integration step
-T = 100  # horizon length
+dt = 0.3  # [s]  integration step
+T = 32  # horizon length
 V_REF = 0.5 # [m/s]  reference velocity for the circle cost
-CIRCLE_RADIUS = 1.0 # [m]  radius of the circle to track
+CIRCLE_RADIUS = 2.0 # [m]  radius of the circle to track
 n, m = 4, 2  # state & control sizes
 
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
-B_U_1 = 8.0  # m/s² (≈0.2 g per unit throttle)
+GRAVITY = 9.81  # m/s²
+ROLLING_FRICTION_COEFF = 0.0 # estimate for rolling friction
+B_U_1 = 5.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.4
 THROTTLE_MAX = 0.25 # max throttle without slipping
@@ -107,31 +109,59 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
     state   = [x, y, v, θ]
     control = [u, δ]      <-- throttle and steering commands
     """
+    def drag_force(v,
+                Crr=0.015, m=MASS, g=GRAVITY,
+                Fc=0.05, Fs=0.07, vs=0.08,
+                c1=0.08, c2=0.02,
+                eps=1e-3, delta=1e-3):
+        """
+        Returns longitudinal drag/friction force [N] opposing velocity v [m/s].
+        Smooth & branchless; suitable for differentiable simulators.
+        """
+        sgn_smooth = jnp.tanh(v/eps)                  # smooth sign
+        abs_smooth = jnp.sqrt(v*v + delta*delta)      # smooth |v|
+        stribeck = Fc + (Fs - Fc) * jnp.exp(-(abs_smooth/vs)**2)
+        rolling_plus_contact = Crr*m*g + stribeck
+        final_force = - sgn_smooth * rolling_plus_contact - c1*v - c2*v*abs_smooth
+        #jax.debug.print("Drag force: {final_force}", final_force=final_force)
+        return final_force
+
+    def d_state(curr_state: jnp.ndarray) -> jnp.ndarray:
+        """
+        Computes the current state derivative.
+        Returns:
+            state_dot: state derivative vector [x_dot, y_dot, v_dot, θ_dot]
+        """
+        x, y, v, th = curr_state
+        u_raw, delta_raw = control
+        k = 100
+        # clip controls
+        u_raw = jnp.tanh(u_raw)
+        #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
+        #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
+        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
+        delta_raw += HEADING_BIAS_1
+        delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+
+        # compute state changes
+        x_dot = v * jnp.cos(th)
+        y_dot = v * jnp.sin(th)
+        #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
+        v_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * v * v / LENGTH  # account for rolling friction
+        th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
+        state_dot = jnp.array([x_dot, y_dot, v_dot, th_dot])
+        return state_dot
     # unpack state, control
     x, y, v, th = state
-    u_raw, delta_raw = control
-    k = 100
-    # clip controls
-    u_raw = jnp.tanh(u_raw)
-    #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
-    #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
-    u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
-    delta_raw += HEADING_BIAS_1
-    delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+    k1 = dt * d_state(state)
+    k2 = dt * d_state(state + k1 / 2)
+    k3 = dt * d_state(state + k2 / 2)
+    k4 = dt * d_state(state + k3)
+    # Update y based on the RK4 formula
+    next_state = state + (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
-    # compute state changes
-    x_dot = v * jnp.cos(th)
-    y_dot = v * jnp.sin(th)
-    v_dot = B_U_1 * u_raw
-    th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
-
-    # update state
-    x_next = x + x_dot * dt
-    y_next = y + y_dot * dt
-    v_next = v + v_dot * dt
-    th_next = th + th_dot * dt
-
-    return jnp.array([x_next, y_next, v_next, th_next])
+    #return jnp.array([x_next, y_next, v_next, th_next])
+    return next_state
 
 
 # -- single-step quadratic-ish cost -------------------------------------------------
@@ -367,10 +397,10 @@ circle_cost = build_circle_cost(
     radius=CIRCLE_RADIUS,
     v_ref=V_REF,      # Slower reference velocity
     dt=dt,
-    w_pos=50.0,     # Stronger position tracking
-    w_th=5.0,      # Moderate heading tracking
-    w_v=10.0,        # Moderate velocity tracking
-    w_u=10.0,        # Moderate control penalty
+    w_pos=25.0,     # Stronger position tracking
+    w_th=1.0,      # Moderate heading tracking
+    w_v=2.0,        # Moderate velocity tracking
+    w_u=15.0,        # Moderate control penalty
     w_omega=0.0,     # Lower angular velocity weight
     term_weight=100.0
 )
@@ -382,7 +412,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # get pose information from the server
     x0 = None
     if DEBUGGING_MODE:
-        x0 = jnp.array([CIRCLE_RADIUS, 0, 0.0, jnp.pi / 2])  # fixed initial state
+        x0 = jnp.array([CIRCLE_RADIUS, 0, 0.01, jnp.pi / 2])  # fixed initial state
     else:
         client_socket.connect((HOST, PORT)) 
         client_socket.sendall(RECV_CODE.encode("utf-8"))
@@ -540,6 +570,20 @@ fig, axs = plt.subplots(3, 1, figsize=(8, 8))
 
 # Get better state array using RK4
 def get_states_from_RK4(states, controls, dt):
+    def drag_force(v,
+                Crr=0.015, m=MASS, g=GRAVITY,
+                Fc=0.05, Fs=0.07, vs=0.08,
+                c1=0.08, c2=0.02,
+                eps=1e-3, delta=1e-3):
+        """
+        Returns longitudinal drag/friction force [N] opposing velocity v [m/s].
+        Smooth & branchless; suitable for differentiable simulators.
+        """
+        sgn_smooth = jnp.tanh(v/eps)                  # smooth sign
+        abs_smooth = jnp.sqrt(v*v + delta*delta)      # smooth |v|
+        stribeck = Fc + (Fs - Fc) * jnp.exp(-(abs_smooth/vs)**2)
+        rolling_plus_contact = Crr*m*g + stribeck
+        return - sgn_smooth * rolling_plus_contact - c1*v - c2*v*abs_smooth
     # Define derivative function
     def f(t, state: jnp.ndarray) -> np.ndarray:
         """
@@ -566,7 +610,9 @@ def get_states_from_RK4(states, controls, dt):
         # compute state changes
         x_dot = v * jnp.cos(th)
         y_dot = v * jnp.sin(th)
-        v_dot = B_U_1 * u_raw
+        C_rr = 1.0 * (0.0095 * (3.6 * v / 100) ** 2)
+        #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
+        v_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * v * v / LENGTH
         th_dot = v / LENGTH * jnp.tan(B_DELTA * delta_raw)
         state_dot = np.array([x_dot, y_dot, v_dot, th_dot])
         return state_dot
