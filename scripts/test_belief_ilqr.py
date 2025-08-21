@@ -41,7 +41,7 @@ from solver_with_time import iLQR_t  # ← keep consistent with your repo
 import socket
 import json
 
-DEBUGGING_MODE = True  # if True, use fixed initial state and simulate; otherwise, get from server and send controls over TCP
+DEBUGGING_MODE = False  # if True, use fixed initial state and simulate; otherwise, get from server and send controls over TCP
 TIME_REQ = True # if True, use iLQR_t; otherwise, use iLQR
 USING_RK4_DYNAMICS = True # if True, use Runge-Kutta 4 to update state dynamics
 USING_RK4_GRAPHING = False # if True, use Runge-Kutta 4 to graph state trajectory
@@ -55,10 +55,11 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.075  # [s]  integration step
-T = 60  # horizon length
+dt = 0.1  # [s]  integration step
+T = 100  # horizon length
 V_REF = 2.5 # [m/s]  reference velocity for the circle cost
-VX_INIT = 0.01 #[m/s]
+VX_INIT = 0.0 #[m/s]
+CIRCLE = (0.0, 2.0)
 CIRCLE_RADIUS = 2.0 # [m]  radius of the circle to track
 n = 6 if USING_FULL_DYNAMICS else 4 # state size
 m = 2  # control size (throttle, steering)
@@ -66,7 +67,7 @@ m = 2  # control size (throttle, steering)
 MASS = 2.5  # kg
 LENGTH = 0.26 # wheelbase
 GRAVITY = 9.81  # m/s²
-ROLLING_FRICTION_COEFF = 0.0 # estimate for rolling friction
+ROLLING_FRICTION_COEFF = 0.05 # estimate for rolling friction
 COM_TO_FRONT = 0.082 # distance from center of mass to front axle (m)
 COM_TO_REAR = LENGTH - COM_TO_FRONT
 YAW_INERTIA = 0.015 # kg*m²
@@ -75,8 +76,8 @@ C_ALPHA_R = 2.0 # cornering stiffness rear (N/rad)
 B_U_1 = 5.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.4
-THROTTLE_MAX = 0.5 # max throttle without slipping
-HEADING_BIAS_1 = -0.0  # steering bias
+THROTTLE_MAX = 0.4 # max throttle without slipping
+HEADING_BIAS_1 = -0.04  # steering bias
 U_L = 1.25
 U_A = 0.25
 U_B = 15
@@ -150,12 +151,12 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
         u_raw, delta_raw = control
         k = 100
         # clip controls
-        #u_raw = jnp.tanh(u_raw)
+        u_raw = jnp.tanh(u_raw)
         #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
         #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
         #u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k - 0.007  # squashes throttle via log
-        #delta_raw += HEADING_BIAS_1
-        #delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+        delta_raw += HEADING_BIAS_1
+        delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
         state_dot = None
         if USING_FULL_DYNAMICS:
@@ -181,7 +182,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
             # compute state changes
             x_dot = vx * jnp.cos(th)
             y_dot = vx * jnp.sin(th)
-            #v_dot = B_U_1 * u_raw - drag_force(v) / MASS  # account for rolling friction
+            #vx_dot = B_U_1 * u_raw - drag_force(vx) / MASS  # account for rolling friction
             vx_dot = B_U_1 * u_raw - ROLLING_FRICTION_COEFF * vx * vx / LENGTH  # account for rolling friction
             th_dot = vx / LENGTH * jnp.tan(B_DELTA * delta_raw)
             state_dot = jnp.array([x_dot, y_dot, vx_dot, th_dot])
@@ -296,6 +297,7 @@ def build_circle_cost(
         
         # Heading tracking (with proper angle wrapping)
         yaw_err = wrap_angle(x[3] - x_ref[3])
+        yaw_err = x[3] - x_ref[3]
         head_cost = w_th * yaw_err**2
         
         # Velocity tracking
@@ -326,7 +328,17 @@ def build_circle_cost(
         T = us.shape[0]
         t_arr = jnp.arange(T)
         step_costs = jax.vmap(stage_cost)(xs[:-1], us, t_arr)
-        return jnp.sum(step_costs) + terminal_cost(xs[-1], T)
+
+        # penalize sharp changes in throttle and deviation from mean
+        w_du = 1000.0
+        du = us[1:, 0] - us[:-1, 0]
+        smooth_cost = w_du * jnp.sum(du ** 2)
+        smooth_cost = 0.0
+        w_dev = 4000.0
+        mean_throttle = jnp.mean(us[:,0])
+        dev_cost = w_dev * jnp.sum((us[:,0] - mean_throttle)**2)
+        dev_cost = 0.0
+        return jnp.sum(step_costs) + smooth_cost + dev_cost + terminal_cost(xs[-1], T)
 
     return {
         "stage": lambda x, u, t: stage_cost(x, u, t),
@@ -435,12 +447,12 @@ circle_cost = build_circle_cost(
     radius=CIRCLE_RADIUS,
     v_ref=V_REF,      # Slower reference velocity
     dt=dt,
-    w_pos=10.0,     # Stronger position tracking
-    w_th=5.0,      # Moderate heading tracking
-    w_v=50.0,        # Moderate velocity tracking
-    w_u=25.0,        # Moderate control penalty
-    w_omega=40.0,     # Lower angular velocity weight
-    term_weight=100.0
+    w_pos=20.0,     # Stronger position tracking
+    w_th=15.0,      # Moderate heading tracking
+    w_v=1.0,        # Moderate velocity tracking
+    w_u=40.0,        # Moderate control penalty
+    w_omega=1.0,     # Lower angular velocity weight
+    term_weight=10.0
 )
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -451,9 +463,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     x0 = None
     if DEBUGGING_MODE:
         if USING_FULL_DYNAMICS:
-            x0 = jnp.array([CIRCLE_RADIUS, 0, jnp.pi / 2, VX_INIT, 0.00, 0.0])  # fixed initial state
+            x0 = jnp.array([CIRCLE_RADIUS + CIRCLE[0], CIRCLE[1], jnp.pi / 2, VX_INIT, 0.00, 0.0])  # fixed initial state
         else:
-            x0 = jnp.array([CIRCLE_RADIUS, 0, VX_INIT, jnp.pi / 2])  # fixed initial state
+            x0 = jnp.array([CIRCLE_RADIUS + CIRCLE[0], CIRCLE[1], VX_INIT, jnp.pi / 2])  # fixed initial state
     else:
         client_socket.connect((HOST, PORT)) 
         client_socket.sendall(RECV_CODE.encode("utf-8"))
@@ -493,16 +505,17 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     # --------------------------------------------------------------------------- #
     
     # Low-pass filter parameters
-    alpha = 0.3  # filter coefficient (0 < alpha < 1, smaller = more filtering)
+    alpha = 0.35  # filter coefficient (0 < alpha < 1, smaller = more filtering)
     filtered_throttle = 0.0  # initialize filtered values
     filtered_steering = 0.0
+    filtered_controls = np.zeros_like(controls_np)
     
     for i, (state, control) in enumerate(zip(states_np, controls_np)): # iterate over all controls
         curr_throttle = float(control[0])
         curr_steering = float(control[1])
         
         # Apply low-pass filter (exponential moving average)
-        if i == 0:
+        if i == -1:
             # First iteration: initialize with current values
             filtered_throttle = curr_throttle
             filtered_steering = curr_steering
@@ -510,10 +523,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
             # Apply filter: filtered = alpha * current + (1-alpha) * previous_filtered
             filtered_throttle = alpha * curr_throttle + (1 - alpha) * filtered_throttle
             filtered_steering = alpha * curr_steering + (1 - alpha) * filtered_steering
+        #filtered_steering = curr_steering
         
         # clip controls if not already
         filtered_throttle = min(THROTTLE_MAX, max(0, filtered_throttle))
         filtered_steering = min(1, max(-1, filtered_steering))
+        filtered_controls[i] = np.array([filtered_throttle, filtered_steering])
         
         # send data over the network
         control_dict = {"throttle": filtered_throttle, "steering": filtered_steering}
@@ -526,6 +541,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
             client_socket.sendall(json_str.encode("utf-8"))
             # now, wait for dt number of ms to send the next command
             time.sleep(dt)
+    # finally, send stop command: (0,0)
+    end_control_dict = {"throttle": 0.0, "steering": 0.0}
+    json_str_end = json.dumps(end_control_dict)
+    if not DEBUGGING_MODE:
+        print("Ending control sequence...")
+        client_socket.sendall(json_str_end.encode("utf-8"))
+        print("Control sequence finished.")
 
 
 # --------------------------------------------------------------------------- #
@@ -610,7 +632,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
 # --------------------------------------------------------------------------- #
 t = jnp.arange(T + 1) * dt
 
-fig, axs = plt.subplots(3, 1, figsize=(8, 8))
+fig, axs = plt.subplots(4, 1, figsize=(8, 8))
 
 # Get better state array using RK4
 def get_states_from_RK4(states, controls, dt):
@@ -691,6 +713,7 @@ def get_states_from_RK4(states, controls, dt):
     return y_values
 
 better_states = get_states_from_RK4(states_np, controls_np, dt) if USING_RK4_GRAPHING else states_np
+filtered_states = get_states_from_RK4(states_np, filtered_controls, dt)
 
 # (a) XY trajectory
 axs[0].plot(better_states[:, 0], better_states[:, 1], marker="o", ms=2)
@@ -701,7 +724,7 @@ axs[0].axis("equal")
 axs[0].grid(alpha=0.3)
 
 # Plot reference circle
-center = (0,0)
+center = CIRCLE
 radius = CIRCLE_RADIUS
 theta_ref = jnp.linspace(0, 2 * jnp.pi, 100)
 x_circle = center[0] + radius * jnp.cos(theta_ref)
@@ -709,22 +732,39 @@ y_circle = center[1] + radius * jnp.sin(theta_ref)
 axs[0].plot(x_circle, y_circle, 'k--', label='Reference circle')
 axs[0].legend()
 
+# (a') XY trajectory with filtered controls
+axs[1].plot(filtered_states[:, 0], filtered_states[:, 1], marker="o", ms=2)
+axs[1].set_title("Unicycle XY path with filter")
+axs[1].set_xlabel("x [m]")
+axs[1].set_ylabel("y [m]")
+axs[1].axis("equal")
+axs[1].grid(alpha=0.3)
+
+# Plot reference circle
+center = CIRCLE
+radius = CIRCLE_RADIUS
+theta_ref = jnp.linspace(0, 2 * jnp.pi, 100)
+x_circle = center[0] + radius * jnp.cos(theta_ref)
+y_circle = center[1] + radius * jnp.sin(theta_ref)
+axs[1].plot(x_circle, y_circle, 'k--', label='Reference circle')
+axs[1].legend()
+
 # (b) heading + positions vs time
-axs[1].plot(t, better_states[:, 0], label="x")
-axs[1].plot(t, better_states[:, 1], label="y")
-axs[1].plot(t, better_states[:, 2], label="v", linestyle="--")
-axs[1].plot(t, better_states[:, 3], label="θ", linestyle="--")
-axs[1].set_title("State trajectories"), axs[1].grid(alpha=0.3)
-axs[1].legend(ncol=3)
+axs[2].plot(t, better_states[:, 0], label="x")
+axs[2].plot(t, better_states[:, 1], label="y")
+axs[2].plot(t, better_states[:, 2], label="v", linestyle="--")
+axs[2].plot(t, better_states[:, 3], label="θ", linestyle="--")
+axs[2].set_title("State trajectories"), axs[1].grid(alpha=0.3)
+axs[2].legend(ncol=3)
 
 # (c) controls
-axs[2].step(t[:-1], controls_np[:, 0], where="post", label="u")
-axs[2].step(t[:-1], controls_np[:, 1], where="post", label="δ")
-axs[2].set_title("Control inputs")
-axs[2].set_xlabel("time [s]")
-axs[2].set_ylabel("command")
-axs[2].grid(alpha=0.3)
-axs[2].legend()
+axs[3].step(t[:-1], controls_np[:, 0], where="post", label="u")
+axs[3].step(t[:-1], controls_np[:, 1], where="post", label="δ")
+axs[3].set_title("Control inputs")
+axs[3].set_xlabel("time [s]")
+axs[3].set_ylabel("command")
+axs[3].grid(alpha=0.3)
+axs[3].legend()
 
 plt.tight_layout()
 plt.savefig("figures/ex_5_ilqr.png", dpi=300)

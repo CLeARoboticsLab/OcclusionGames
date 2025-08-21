@@ -67,7 +67,7 @@ class iLQR_t:
         dynamics,
         horizon,
         dims,
-        rel_cost_decrease_threshold=1e-7,
+        rel_cost_decrease_threshold=1e-6,
         feedforward_norm_threshold=1.0,
         max_iterations=50000,
         alpha_init=1.0,
