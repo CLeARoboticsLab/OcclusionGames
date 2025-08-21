@@ -43,7 +43,8 @@ import json
 
 DEBUGGING_MODE = True  # if True, use fixed initial state and simulate; otherwise, get from server and send controls over TCP
 TIME_REQ = True # if True, use iLQR_t; otherwise, use iLQR
-USING_RK4 = True # if True, use Runge-Kutta 4 to graph state trajectory
+USING_RK4_DYNAMICS = True # if True, use Runge-Kutta 4 to update state dynamics
+USING_RK4_GRAPHING = False # if True, use Runge-Kutta 4 to graph state trajectory
 USING_FULL_DYNAMICS = False # if True, use full dynamics; otherwise, use simplified bicycle model
 
 HOST = "192.168.50.236"
@@ -54,11 +55,11 @@ RECV_CODE = "get_pose"
 # --------------------------------------------------------------------------- #
 # 1.  Dynamics & cost
 # --------------------------------------------------------------------------- #
-dt = 0.05  # [s]  integration step
+dt = 0.075  # [s]  integration step
 T = 60  # horizon length
-V_REF = 2.75 # [m/s]  reference velocity for the circle cost
+V_REF = 2.5 # [m/s]  reference velocity for the circle cost
 VX_INIT = 0.01 #[m/s]
-CIRCLE_RADIUS = 1.0 # [m]  radius of the circle to track
+CIRCLE_RADIUS = 2.0 # [m]  radius of the circle to track
 n = 6 if USING_FULL_DYNAMICS else 4 # state size
 m = 2  # control size (throttle, steering)
 
@@ -74,7 +75,7 @@ C_ALPHA_R = 2.0 # cornering stiffness rear (N/rad)
 B_U_1 = 5.0  # m/s² (≈0.2 g per unit throttle)
 B_U_2 = 4.5  # m/s² (≈0.2 g per unit throttle)
 B_DELTA = 0.4
-THROTTLE_MAX = 0.3 # max throttle without slipping
+THROTTLE_MAX = 0.5 # max throttle without slipping
 HEADING_BIAS_1 = -0.0  # steering bias
 U_L = 1.25
 U_A = 0.25
@@ -106,6 +107,7 @@ def runge_kutta_4(f, y0: np.ndarray, t0, tf, h):
         k2 = h * f(t + h / 2, y + k1 / 2)
         k3 = h * f(t + h / 2, y + k2 / 2)
         k4 = h * f(t + h, y + k3)
+        #print ("K values: ", k1, k2, k3, k4)
         # Update y based on the RK4 formula
         y_values[i] = y + (k1 + 2 * k2 + 2 * k3 + k4) / 6
     return t_values, y_values
@@ -148,12 +150,12 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
         u_raw, delta_raw = control
         k = 100
         # clip controls
-        u_raw = jnp.tanh(u_raw)
+        #u_raw = jnp.tanh(u_raw)
         #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
         #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
-        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k - 0.007  # squashes throttle via log
-        delta_raw += HEADING_BIAS_1
-        delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+        #u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k - 0.007  # squashes throttle via log
+        #delta_raw += HEADING_BIAS_1
+        #delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
         state_dot = None
         if USING_FULL_DYNAMICS:
@@ -185,7 +187,7 @@ def dynamics(state: jnp.ndarray, control: jnp.ndarray) -> jnp.ndarray:
             state_dot = jnp.array([x_dot, y_dot, vx_dot, th_dot])
         return state_dot
     next_state = None
-    if USING_RK4:
+    if USING_RK4_DYNAMICS:
         # apply RK4
         k1 = dt * d_state(state)
         k2 = dt * d_state(state + k1 / 2)
@@ -433,12 +435,12 @@ circle_cost = build_circle_cost(
     radius=CIRCLE_RADIUS,
     v_ref=V_REF,      # Slower reference velocity
     dt=dt,
-    w_pos=50.0,     # Stronger position tracking
+    w_pos=10.0,     # Stronger position tracking
     w_th=5.0,      # Moderate heading tracking
-    w_v=5.0,        # Moderate velocity tracking
-    w_u=20.0,        # Moderate control penalty
-    w_omega=1.0,     # Lower angular velocity weight
-    term_weight=10.0
+    w_v=50.0,        # Moderate velocity tracking
+    w_u=25.0,        # Moderate control penalty
+    w_omega=40.0,     # Lower angular velocity weight
+    term_weight=100.0
 )
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -647,12 +649,12 @@ def get_states_from_RK4(states, controls, dt):
             x, y, vx, th = state
         k = 100
         # clip controls
-        u_raw = jnp.tanh(u_raw)
+        #u_raw = jnp.tanh(u_raw)
         #u_raw = jnp.maximum(u_raw, 0.0) #ensure throttle is not too low
         #u_raw = U_L / (1 + U_A * jnp.exp(-U_B * u_raw)) - 1  # squashes throttle via sigmoid
-        u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
-        delta_raw += HEADING_BIAS_1
-        delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
+        #u_raw = jnp.log(1 + jnp.exp(k * (u_raw))) / k  # squashes throttle via log
+        #delta_raw += HEADING_BIAS_1
+        #delta_raw = jnp.tanh(delta_raw)  # clamp steering to [-1, 1] via tanh
 
         state_dot = None
         if USING_FULL_DYNAMICS:
@@ -685,10 +687,10 @@ def get_states_from_RK4(states, controls, dt):
         return state_dot
     
     # Runge-Kutta 4 integration
-    t_values, y_values = runge_kutta_4(f, states[0], 0.0, dt * T, dt)
+    t_values, y_values = runge_kutta_4(f, x0, 0.0, dt * T, dt)
     return y_values
 
-better_states = get_states_from_RK4(states_np, controls_np, dt) if USING_RK4 else states_np
+better_states = get_states_from_RK4(states_np, controls_np, dt) if USING_RK4_GRAPHING else states_np
 
 # (a) XY trajectory
 axs[0].plot(better_states[:, 0], better_states[:, 1], marker="o", ms=2)
