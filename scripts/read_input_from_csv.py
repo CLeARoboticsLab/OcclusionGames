@@ -8,7 +8,7 @@ import sys
 from DataCollector import DataCollector
 import math
 
-CSV_LOGFILE = "dynamics_csv/nguyen_sine_exp_dynamics.csv"
+CSV_LOGFILE = "dynamics_csv/outside_collab_logfile.csv"
 
 def publish_from_csv(csv_path, rate_hz=100):
     # Initialize ROS node
@@ -34,6 +34,7 @@ def publish_from_csv(csv_path, rate_hz=100):
                 with open(csv_path, 'r') as csvfile:
                     reader = csv.DictReader(csvfile)
                     if 'u' not in reader.fieldnames or 'delta' not in reader.fieldnames:
+                        print(reader.fieldnames)
                         rospy.logerr("CSV must contain 'u' and 'delta' columns.")
                         return
                     # Set rate
@@ -63,6 +64,7 @@ def publish_from_csv(csv_path, rate_hz=100):
                         rate.sleep()
 
                     rospy.loginfo("Finished publishing all rows.")
+                    throttle_pub.publish(Float32(0.0))
 
             except IOError:
                 rospy.logerr("Could not read file: %s", csv_path)
@@ -75,7 +77,7 @@ def publish_from_csv(csv_path, rate_hz=100):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: csv_to_ros_publisher.py <path_to_csv>")
+        print("Usage: read_from_csv.py <path_to_csv>")
         sys.exit(1)
     csv_path = sys.argv[1]
     publish_from_csv(csv_path)
