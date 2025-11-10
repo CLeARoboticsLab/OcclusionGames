@@ -10,9 +10,9 @@ import math
 POSE_TOPIC = "/vrpn_client_node/JaiAliJetRacer/pose"
 VEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/twist"
 #ACCEL_TOPIC = "/vrpn_client_node/JaiAliJetRacer/accel" # Remind me of Accel World lol
-THROTTLE_VALUE = 0.3
+THROTTLE_VALUE = 0.1
 STEERING_VALUE = 0.0
-HEADING_BIAS = -0.05
+HEADING_BIAS = -0.045
 X_STOP = 3.0
 T_STOP = 10
 
@@ -67,7 +67,7 @@ class ViconLogger:
         if self.position.position.x >= X_STOP or t - self.start_time > T_STOP:
             self.vel_sub.unregister()
             self.pose_sub.unregister()
-            self.throttle_pub.publish(-0.3)
+            self.throttle_pub.publish(0)
             self.steering_pub.publish(0)
             print("ALL DONE!")
 
