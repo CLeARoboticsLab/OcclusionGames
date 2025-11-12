@@ -65,7 +65,7 @@ n = 6 if USING_FULL_DYNAMICS else 4 # state size
 m = 2  # control size (throttle, steering)
 
 MASS = 2.5  # kg
-LENGTH = 0.26 # wheelbase
+LENGTH = 0.2651 # wheelbase
 GRAVITY = 9.81  # m/s²
 ROLLING_FRICTION_COEFF = 0.05 # estimate for rolling friction
 COM_TO_FRONT = 0.082 # distance from center of mass to front axle (m)
